@@ -39,6 +39,7 @@ Measured numbers live in **[BENCHMARKS.md](BENCHMARKS.md)**.
 | 7 | [07-spec-testing-benchmarks.md](07-spec-testing-benchmarks.md) | Correctness gates, benchmark protocol, perf targets |
 | 8 | [08-spec-release-ci.md](08-spec-release-ci.md) | CI on arm64 runners, packaging, versioning, signing |
 | 9 | [09-decisions.md](09-decisions.md) | Architecture decision records (Metal vs OpenCL, MLX vs PyTorch/TF, …) |
+| 10 | [10-model-plan.md](10-model-plan.md) | Which Claude model does each Phase 1–2 step, and a log of what was used |
 | R | [ROADMAP.md](ROADMAP.md) | **Phased release plan with ordered steps and exit criteria** |
 
 ## Release summary

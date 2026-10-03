@@ -32,6 +32,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 
 ## Phase 1 — `v0.17.1-as.1` "Fast CPU" (spec 04)
 
+> Which model does each step, and the tracking log: [10-model-plan.md](10-model-plan.md).
+
 1. `src/Platform.h`: core counts, QoS, and feature detection.
 2. Accelerate as the default BLAS, single-threaded per call, with a startup log line.
 3. Default `-t` and QoS for P/E cores.
@@ -41,6 +43,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 **Exit:** ≥1.5× Eigen on 15b×192, and G1 passes. Tag `as.1`.
 
 ## Phase 2 — `v0.18.0-as.2` "Metal" (spec 05) ★
+
+> Model per step and tracking: [10-model-plan.md](10-model-plan.md).
 
 1. Extract `BatchQueue.h` from `OpenCLScheduler`. No behavior change, and it is
    sent upstream as well.
