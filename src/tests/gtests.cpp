@@ -403,6 +403,11 @@ TEST(PlatformTest, CoreCountsAreSane) {
 #include "CPUPipe.h"
 #include "MetalContext.h"
 #include "MetalNetwork.h"
+#include "MetalScheduler.h"
+#include "Network.h"
+
+#include <atomic>
+#include <thread>
 
 TEST(MetalContextTest, DeviceAndSelfTest) {
     std::string error;
@@ -463,7 +468,7 @@ TEST(MetalNetworkTest, MatchesCpuAndBatchesConsistently) {
     std::string error;
     const auto ctx = MetalContext::create(error);
     ASSERT_NE(ctx, nullptr) << error;
-    MetalNetwork metal(*ctx, C, blocks, *weights);
+    MetalNetwork metal(*ctx, C, blocks, *weights, {1, N});
 
     CPUPipe cpu;
     cpu.initialize(C);
@@ -508,5 +513,132 @@ TEST(MetalNetworkTest, MatchesCpuAndBatchesConsistently) {
     EXPECT_LE(worst_batch, 1e-6f) << "batch 4 vs batch 1";
     std::cout << "Metal vs CPU max diff " << worst_cpu << ", batch vs single "
               << worst_batch << ", max |output| " << magnitude << std::endl;
+}
+
+// Reference outputs from the CPU backend, one per input.
+struct EvalCase {
+    std::vector<float> in, pol, val;
+};
+
+static std::vector<EvalCase> make_cases(
+    const std::shared_ptr<ForwardPipe::ForwardPipeWeights>& weights,
+    const int C, const int count, std::mt19937& rng) {
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    CPUPipe cpu;
+    cpu.initialize(C);
+    cpu.push_weights(WINOGRAD_ALPHA, Network::INPUT_CHANNELS, C, weights);
+    std::vector<EvalCase> cases(count);
+    for (auto& c : cases) {
+        c.in.resize(Network::INPUT_CHANNELS * plane);
+        for (auto& x : c.in) {
+            x = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+        }
+        c.pol.resize(Network::OUTPUTS_POLICY * plane);
+        c.val.resize(Network::OUTPUTS_VALUE * plane);
+        cpu.forward(c.in, c.pol, c.val);
+    }
+    return cases;
+}
+
+static float max_diff(const std::vector<float>& a, const std::vector<float>& b) {
+    auto worst = 0.0f;
+    for (auto i = size_t{0}; i < a.size(); i++) {
+        worst = std::max(worst, std::abs(a[i] - b[i]));
+    }
+    return worst;
+}
+
+// Many search threads, each input distinct: any mix-up between batch rows,
+// slots or waiting threads shows up as a wrong answer.
+TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
+    constexpr auto C = 32;
+    constexpr auto blocks = 2;
+    constexpr auto threads = 12;
+    constexpr auto iterations = 150;
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(99);
+    const auto weights = make_test_weights(C, blocks, rng);
+    const auto cases = make_cases(weights, C, 37, rng);
+
+    MetalScheduler metal(4, 3);
+    metal.initialize(C);
+    metal.push_weights(WINOGRAD_ALPHA, Network::INPUT_CHANNELS, C, weights);
+
+    std::atomic<int> wrong{0};
+    std::atomic<int> done{0};
+    std::vector<float> worst(threads, 0.0f);
+    std::vector<std::thread> pool;
+    for (auto t = 0; t < threads; t++) {
+        pool.emplace_back([&, t]() {
+            std::vector<float> pol(Network::OUTPUTS_POLICY * plane);
+            std::vector<float> val(Network::OUTPUTS_VALUE * plane);
+            for (auto i = 0; i < iterations; i++) {
+                const auto& c = cases[(t * 7 + i * 3) % cases.size()];
+                metal.forward(c.in, pol, val);
+                const auto d = std::max(max_diff(pol, c.pol), max_diff(val, c.val));
+                worst[t] = std::max(worst[t], d);
+                if (d > 1e-4f) {
+                    wrong++;
+                }
+                done++;
+            }
+        });
+    }
+    for (auto& t : pool) {
+        t.join();
+    }
+    EXPECT_EQ(done.load(), threads * iterations);
+    EXPECT_EQ(wrong.load(), 0);
+    std::cout << "max diff vs CPU over " << done.load() << " evals: "
+              << *std::max_element(worst.begin(), worst.end()) << std::endl;
+}
+
+// drain() releases every waiting thread with NetworkHaltException, and the
+// scheduler works again after resume().
+TEST(MetalSchedulerTest, DrainReleasesWaitersAndResumeRestarts) {
+    constexpr auto C = 32;
+    constexpr auto blocks = 2;
+    constexpr auto threads = 10;
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(7);
+    const auto weights = make_test_weights(C, blocks, rng);
+    const auto cases = make_cases(weights, C, 8, rng);
+
+    MetalScheduler metal(4, 3);
+    metal.initialize(C);
+    metal.push_weights(WINOGRAD_ALPHA, Network::INPUT_CHANNELS, C, weights);
+
+    std::atomic<int> halted{0};
+    std::atomic<int> evals{0};
+    std::vector<std::thread> pool;
+    for (auto t = 0; t < threads; t++) {
+        pool.emplace_back([&, t]() {
+            std::vector<float> pol(Network::OUTPUTS_POLICY * plane);
+            std::vector<float> val(Network::OUTPUTS_VALUE * plane);
+            try {
+                for (auto i = 0;; i++) {
+                    metal.forward(cases[(t + i) % cases.size()].in, pol, val);
+                    evals++;
+                }
+            } catch (const NetworkHaltException&) {
+                halted++;
+            }
+        });
+    }
+    while (evals.load() < 200) {
+        std::this_thread::yield();
+    }
+    metal.drain();
+    for (auto& t : pool) {
+        t.join(); // hangs here if drain() misses a waiter
+    }
+    EXPECT_EQ(halted.load(), threads);
+
+    metal.resume();
+    std::vector<float> pol(Network::OUTPUTS_POLICY * plane);
+    std::vector<float> val(Network::OUTPUTS_VALUE * plane);
+    metal.forward(cases[0].in, pol, val);
+    EXPECT_LE(max_diff(pol, cases[0].pol), 1e-4f);
+    EXPECT_LE(max_diff(val, cases[0].val), 1e-4f);
 }
 #endif

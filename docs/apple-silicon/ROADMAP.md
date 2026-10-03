@@ -54,7 +54,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
    (`cmake --preset macos-metal`).
 3. ✅ `MetalNetwork` via MPSGraph, fp32, fixed batch sizes, with BN folded into conv
    (G2 passes; synchronous batch-1 `MetalPipe` is a stopgap until step 4).
-4. `MetalScheduler`: shared-buffer slot ring, triple buffering, completion wakeups.
+4. ✅ `MetalScheduler`: worker-owned shared-buffer slots, 2 batches in flight,
+   completion wakeups (ADR-007). 1.65× the CPU on random 15b×192.
 5. Gate G2 (fp32). Then add fp16 + `--precision auto` + `USE_METAL_SELFCHECK`.
 6. `--backend` flag, plus Metal as the default on macOS.
 7. Autotune of batch size and precision, with a persisted cache.

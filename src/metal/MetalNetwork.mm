@@ -24,6 +24,7 @@
 
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -36,6 +37,7 @@ namespace {
 constexpr auto PLANES = Network::INPUT_CHANNELS;
 constexpr auto POL_PLANES = Network::OUTPUTS_POLICY;
 constexpr auto VAL_PLANES = Network::OUTPUTS_VALUE;
+constexpr auto PLANE = BOARD_SIZE * BOARD_SIZE;
 
 NSArray<NSNumber*>* shape4(const int a, const int b, const int c, const int d) {
     return @[ @(a), @(b), @(c), @(d) ];
@@ -44,39 +46,6 @@ NSArray<NSNumber*>* shape4(const int a, const int b, const int c, const int d) {
 NSData* float_data(const std::vector<float>& v) {
     return [NSData dataWithBytes:v.data() length:v.size() * sizeof(float)];
 }
-
-} // namespace
-
-// One compiled graph and its shared-memory buffers for a fixed batch size.
-struct BatchGraph {
-    MPSGraphExecutable* exe = nil;
-    id<MTLBuffer> in_buf = nil;
-    id<MTLBuffer> pol_buf = nil;
-    id<MTLBuffer> val_buf = nil;
-    MPSGraphTensorData* in_data = nil;
-    MPSGraphTensorData* pol_data = nil;
-    MPSGraphTensorData* val_data = nil;
-    // Index of the policy / value tensor in the executable's result order.
-    int pol_index = 0;
-    int val_index = 1;
-};
-
-struct MetalNetwork::Impl {
-    id<MTLDevice> device = nil;
-    id<MTLCommandQueue> queue = nil;
-    int channels = 0;
-    int blocks = 0;
-    // Raw weights are kept so that graphs for other batch sizes can be built
-    // lazily; BN folding is redone per graph (cheap next to compilation).
-    ForwardPipe::ForwardPipeWeights weights;
-    std::map<int, BatchGraph> graphs;
-
-    // Constant tensors and convolution descriptors are graph-bound, so they
-    // are created while building each graph.
-    BatchGraph build(int batch);
-};
-
-namespace {
 
 // y = scale * (conv(x) - mean) folded into conv_{w * scale}(x) + b'.
 struct FoldedLayer {
@@ -120,11 +89,16 @@ MPSGraphConvolution2DOpDescriptor* conv_descriptor(const int pad) {
                   weightsLayout:MPSGraphTensorNamedDataLayoutOIHW];
 }
 
-} // namespace
+struct Compiled {
+    MPSGraphExecutable* exe = nil;
+    // Position of the policy result in the executable's result order.
+    int pol_index = 0;
+};
 
-BatchGraph MetalNetwork::Impl::build(const int batch) {
+Compiled compile(id<MTLDevice> device, const int C, const int blocks,
+                 const ForwardPipe::ForwardPipeWeights& weights,
+                 const int batch) {
     constexpr auto B = BOARD_SIZE;
-    const auto C = channels;
     MPSGraph* g = [[MPSGraph alloc] init];
 
     MPSGraphTensor* input = [g placeholderWithShape:shape4(batch, PLANES, B, B)
@@ -138,14 +112,12 @@ BatchGraph MetalNetwork::Impl::build(const int batch) {
         const auto f = fold_bn(weights.m_conv_weights[index],
                                weights.m_batchnorm_means[index],
                                weights.m_batchnorm_stddevs[index], C, in_ch);
-        MPSGraphTensor* w =
-            [g constantWithData:float_data(f.w)
-                          shape:shape4(C, in_ch, 3, 3)
-                       dataType:MPSDataTypeFloat32];
-        MPSGraphTensor* bias =
-            [g constantWithData:float_data(f.b)
-                          shape:shape4(1, C, 1, 1)
-                       dataType:MPSDataTypeFloat32];
+        MPSGraphTensor* w = [g constantWithData:float_data(f.w)
+                                          shape:shape4(C, in_ch, 3, 3)
+                                       dataType:MPSDataTypeFloat32];
+        MPSGraphTensor* bias = [g constantWithData:float_data(f.b)
+                                             shape:shape4(1, C, 1, 1)
+                                          dataType:MPSDataTypeFloat32];
         MPSGraphTensor* t = [g convolution2DWithSourceTensor:x
                                                weightsTensor:w
                                                   descriptor:conv3
@@ -185,100 +157,179 @@ BatchGraph MetalNetwork::Impl::build(const int batch) {
         [[MPSGraphShapedType alloc] initWithShape:shape4(batch, PLANES, B, B)
                                          dataType:MPSDataTypeFloat32];
     MPSGraphDevice* gdev = [MPSGraphDevice deviceWithMTLDevice:device];
-    MPSGraphExecutable* exe = [g compileWithDevice:gdev
-                                             feeds:@{input : in_type}
-                                     targetTensors:@[ pol, val ]
-                                  targetOperations:nil
-                             compilationDescriptor:nil];
-    if (exe == nil) {
+    Compiled c;
+    c.exe = [g compileWithDevice:gdev
+                           feeds:@{input : in_type}
+                   targetTensors:@[ pol, val ]
+                targetOperations:nil
+           compilationDescriptor:nil];
+    if (c.exe == nil) {
         throw std::runtime_error("Metal: MPSGraph compilation failed");
     }
-
-    BatchGraph bg;
-    bg.exe = exe;
-    const auto bytes = [](const int n) { return n * sizeof(float); };
-    const auto plane = B * B;
-    // Shared storage: the CPU and the GPU use the same memory, no copies.
-    bg.in_buf = [device newBufferWithLength:bytes(batch * PLANES * plane)
-                                    options:MTLResourceStorageModeShared];
-    bg.pol_buf = [device newBufferWithLength:bytes(batch * POL_PLANES * plane)
-                                     options:MTLResourceStorageModeShared];
-    bg.val_buf = [device newBufferWithLength:bytes(batch * VAL_PLANES * plane)
-                                     options:MTLResourceStorageModeShared];
-    if (bg.in_buf == nil || bg.pol_buf == nil || bg.val_buf == nil) {
-        throw std::runtime_error("Metal: could not allocate shared buffers");
-    }
-    bg.in_data = [[MPSGraphTensorData alloc]
-        initWithMTLBuffer:bg.in_buf
-                    shape:shape4(batch, PLANES, B, B)
-                 dataType:MPSDataTypeFloat32];
-    bg.pol_data = [[MPSGraphTensorData alloc]
-        initWithMTLBuffer:bg.pol_buf
-                    shape:shape4(batch, POL_PLANES, B, B)
-                 dataType:MPSDataTypeFloat32];
-    bg.val_data = [[MPSGraphTensorData alloc]
-        initWithMTLBuffer:bg.val_buf
-                    shape:shape4(batch, VAL_PLANES, B, B)
-                 dataType:MPSDataTypeFloat32];
-
     // The executable may order its results differently from targetTensors.
-    NSArray<MPSGraphTensor*>* order = exe.targetTensors;
-    if (order != nil && order.count == 2) {
-        bg.pol_index = [order[0] isEqual:pol] ? 0 : 1;
-        bg.val_index = 1 - bg.pol_index;
+    NSArray<MPSGraphTensor*>* order = c.exe.targetTensors;
+    if (order != nil && order.count == 2 && ![order[0] isEqual:pol]) {
+        c.pol_index = 1;
     }
-    return bg;
+    return c;
 }
+
+} // namespace
+
+struct MetalSlot::Impl {
+    int batch = 0;
+    id<MTLBuffer> in_buf = nil;
+    id<MTLBuffer> pol_buf = nil;
+    id<MTLBuffer> val_buf = nil;
+    MPSGraphTensorData* in_data = nil;
+    MPSGraphTensorData* pol_data = nil;
+    MPSGraphTensorData* val_data = nil;
+};
+
+MetalSlot::MetalSlot() : m_impl(std::make_unique<Impl>()) {}
+MetalSlot::~MetalSlot() = default;
+
+int MetalSlot::batch() const {
+    return m_impl->batch;
+}
+
+float* MetalSlot::input() {
+    return static_cast<float*>([m_impl->in_buf contents]);
+}
+
+const float* MetalSlot::policy() const {
+    return static_cast<const float*>([m_impl->pol_buf contents]);
+}
+
+const float* MetalSlot::value() const {
+    return static_cast<const float*>([m_impl->val_buf contents]);
+}
+
+struct MetalNetwork::Impl {
+    id<MTLDevice> device = nil;
+    id<MTLCommandQueue> queue = nil;
+    std::map<int, Compiled> graphs; // by batch size; fixed after construction
+    // MPSGraphExecutable encoding is serialized; execution still overlaps.
+    std::mutex encode_mutex;
+    // Lazily created slots for forward() (tests only).
+    std::map<int, std::unique_ptr<MetalSlot>> forward_slots;
+};
 
 MetalNetwork::MetalNetwork(const MetalContext& ctx, const int channels,
                            const int residual_blocks,
-                           const ForwardPipe::ForwardPipeWeights& weights)
+                           const ForwardPipe::ForwardPipeWeights& weights,
+                           const std::vector<int>& batch_sizes)
     : m_impl(std::make_unique<Impl>()) {
     @autoreleasepool {
         m_impl->device = ctx.impl().device;
         m_impl->queue = ctx.impl().queue;
-        m_impl->channels = channels;
-        m_impl->blocks = residual_blocks;
-        m_impl->weights = weights;
         if (weights.m_conv_weights.size()
             != static_cast<std::size_t>(1 + 2 * residual_blocks)) {
             throw std::runtime_error("Metal: layer count does not match blocks");
         }
-        // Build the batch-1 graph now so weight errors surface at load time.
-        m_impl->graphs.emplace(1, m_impl->build(1));
+        for (const auto batch : batch_sizes) {
+            if (batch < 1) {
+                throw std::runtime_error("Metal: invalid batch size");
+            }
+            if (m_impl->graphs.count(batch) == 0) {
+                m_impl->graphs.emplace(
+                    batch, compile(m_impl->device, channels, residual_blocks,
+                                   weights, batch));
+            }
+        }
     }
 }
 
 MetalNetwork::~MetalNetwork() = default;
 
-void MetalNetwork::forward(const float* const in, const int batch,
-                           float* const pol, float* const val) {
+std::unique_ptr<MetalSlot> MetalNetwork::make_slot(const int batch) const {
+    if (m_impl->graphs.count(batch) == 0) {
+        throw std::logic_error("Metal: no graph compiled for batch size "
+                               + std::to_string(batch));
+    }
     @autoreleasepool {
-        auto it = m_impl->graphs.find(batch);
-        if (it == m_impl->graphs.end()) {
-            it = m_impl->graphs.emplace(batch, m_impl->build(batch)).first;
+        std::unique_ptr<MetalSlot> slot(new MetalSlot());
+        auto& s = *slot->m_impl;
+        auto* const dev = m_impl->device;
+        constexpr auto B = BOARD_SIZE;
+        const auto bytes = [batch](const int planes) {
+            return static_cast<NSUInteger>(batch) * planes * PLANE
+                   * sizeof(float);
+        };
+        s.batch = batch;
+        s.in_buf = [dev newBufferWithLength:bytes(PLANES)
+                                    options:MTLResourceStorageModeShared];
+        s.pol_buf = [dev newBufferWithLength:bytes(POL_PLANES)
+                                     options:MTLResourceStorageModeShared];
+        s.val_buf = [dev newBufferWithLength:bytes(VAL_PLANES)
+                                     options:MTLResourceStorageModeShared];
+        if (s.in_buf == nil || s.pol_buf == nil || s.val_buf == nil) {
+            throw std::runtime_error("Metal: could not allocate shared buffers");
         }
-        auto& g = it->second;
-        constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+        s.in_data = [[MPSGraphTensorData alloc]
+            initWithMTLBuffer:s.in_buf
+                        shape:shape4(batch, PLANES, B, B)
+                     dataType:MPSDataTypeFloat32];
+        s.pol_data = [[MPSGraphTensorData alloc]
+            initWithMTLBuffer:s.pol_buf
+                        shape:shape4(batch, POL_PLANES, B, B)
+                     dataType:MPSDataTypeFloat32];
+        s.val_data = [[MPSGraphTensorData alloc]
+            initWithMTLBuffer:s.val_buf
+                        shape:shape4(batch, VAL_PLANES, B, B)
+                     dataType:MPSDataTypeFloat32];
+        return slot;
+    }
+}
 
-        std::memcpy([g.in_buf contents], in,
-                    sizeof(float) * batch * PLANES * plane);
+void MetalNetwork::run(MetalSlot& slot) const {
+    @autoreleasepool {
+        auto& s = *slot.m_impl;
+        const auto it = m_impl->graphs.find(s.batch);
+        if (it == m_impl->graphs.end()) {
+            throw std::logic_error("Metal: slot batch size has no graph");
+        }
+        const auto& g = it->second;
+        NSArray<MPSGraphTensorData*>* results =
+            g.pol_index == 0 ? @[ s.pol_data, s.val_data ]
+                             : @[ s.val_data, s.pol_data ];
 
+        // The completion handler runs on a Metal thread; the semaphore hands
+        // the finished slot (and any error) back to this thread.
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        __block NSString* failure = nil;
         MPSGraphExecutableExecutionDescriptor* desc =
             [[MPSGraphExecutableExecutionDescriptor alloc] init];
-        desc.waitUntilCompleted = YES;
-        NSMutableArray<MPSGraphTensorData*>* results =
-            [NSMutableArray arrayWithObjects:g.pol_data, g.val_data, nil];
-        results[g.pol_index] = g.pol_data;
-        results[g.val_index] = g.val_data;
-        [g.exe runWithMTLCommandQueue:m_impl->queue
-                          inputsArray:@[ g.in_data ]
-                         resultsArray:results
-                  executionDescriptor:desc];
-
-        std::memcpy(pol, [g.pol_buf contents],
-                    sizeof(float) * batch * POL_PLANES * plane);
-        std::memcpy(val, [g.val_buf contents],
-                    sizeof(float) * batch * VAL_PLANES * plane);
+        desc.completionHandler =
+            ^(NSArray<MPSGraphTensorData*>* /*r*/, NSError* error) {
+                if (error != nil) {
+                    failure = [error localizedDescription];
+                }
+                dispatch_semaphore_signal(done);
+            };
+        {
+            std::lock_guard<std::mutex> lock(m_impl->encode_mutex);
+            [g.exe runAsyncWithMTLCommandQueue:m_impl->queue
+                                   inputsArray:@[ s.in_data ]
+                                  resultsArray:results
+                           executionDescriptor:desc];
+        }
+        dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+        if (failure != nil) {
+            throw std::runtime_error("Metal: GPU error: "
+                                     + std::string([failure UTF8String]));
+        }
     }
+}
+
+void MetalNetwork::forward(const float* const in, const int batch,
+                           float* const pol, float* const val) {
+    auto& slot = m_impl->forward_slots[batch];
+    if (!slot) {
+        slot = make_slot(batch);
+    }
+    std::memcpy(slot->input(), in, sizeof(float) * batch * PLANES * PLANE);
+    run(*slot);
+    std::memcpy(pol, slot->policy(), sizeof(float) * batch * POL_PLANES * PLANE);
+    std::memcpy(val, slot->value(), sizeof(float) * batch * VAL_PLANES * PLANE);
 }

@@ -20,25 +20,61 @@
 #define METALNETWORK_H_INCLUDED
 
 #include <memory>
+#include <vector>
 
 #include "ForwardPipe.h"
 #include "MetalContext.h"
 
-// The residual tower and both 1x1 head convolutions as one MPSGraph, with
-// batch norm folded into the convolution weights. Plain C++ header; the
-// graph lives in MetalNetwork.mm.
+class MetalNetwork;
+
+// Shared-memory input and output buffers for one batch size. The CPU writes
+// the inputs and reads the outputs in place; the GPU uses the same memory, so
+// nothing is copied to or from the device. A slot must be used by one thread
+// at a time, and not touched while MetalNetwork::run() is using it.
+class MetalSlot {
+public:
+    ~MetalSlot();
+    MetalSlot(const MetalSlot&) = delete;
+    MetalSlot& operator=(const MetalSlot&) = delete;
+
+    int batch() const;
+    float* input();               // batch x 18 x 361
+    const float* policy() const;  // batch x 2 x 361
+    const float* value() const;   // batch x 1 x 361
+
+private:
+    friend class MetalNetwork;
+    MetalSlot();
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
+};
+
+// The residual tower and both 1x1 head convolutions as compiled MPSGraphs
+// (one per batch size), with batch norm folded into the convolution weights.
+// Plain C++ header; the graphs live in MetalNetwork.mm.
 class MetalNetwork {
 public:
-    // Takes the raw (not Winograd) weights of ForwardPipe::ForwardPipeWeights.
+    // Compiles a graph for each of batch_sizes from the raw (not Winograd)
+    // weights of ForwardPipe::ForwardPipeWeights. The weights are not kept.
     // Throws std::runtime_error with a readable message on failure.
     MetalNetwork(const MetalContext& ctx, int channels, int residual_blocks,
-                 const ForwardPipe::ForwardPipeWeights& weights);
+                 const ForwardPipe::ForwardPipeWeights& weights,
+                 const std::vector<int>& batch_sizes);
     ~MetalNetwork();
     MetalNetwork(const MetalNetwork&) = delete;
     MetalNetwork& operator=(const MetalNetwork&) = delete;
 
+    // Buffers for one of the batch sizes given to the constructor.
+    std::unique_ptr<MetalSlot> make_slot(int batch) const;
+
+    // Evaluates the slot's inputs into its outputs and returns when the GPU
+    // is done. Thread-safe: several threads may run their own slots at once;
+    // encoding is serialized and the GPU work overlaps.
+    // Throws std::runtime_error if the GPU reports an error.
+    void run(MetalSlot& slot) const;
+
+    // Convenience for tests: copies in, runs, copies out. Not thread-safe.
     // in: batch x 18 x 361; pol: batch x 2 x 361; val: batch x 1 x 361.
-    // Synchronous. Not thread-safe: callers serialize.
     void forward(const float* in, int batch, float* pol, float* val);
 
 private:

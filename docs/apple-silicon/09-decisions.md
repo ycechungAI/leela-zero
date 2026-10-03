@@ -81,3 +81,31 @@
   `.sln`. There are no Docker images until someone needs one; a single modern
   Dockerfile can be added and built in CI then. Fewer moving parts means less
   to keep green.
+
+## ADR-007: Metal scheduler with worker-owned slots and two graphs
+
+- **Status:** Accepted (Phase 2, step 2.4). Refines spec 05 §3.3–3.4.
+- **Context:** Spec 05 proposed a shared ring of K = 3 slots per worker with
+  an explicit `FREE → FILLING → SUBMITTED → DONE` state machine, untracked
+  hazards, and one compiled graph per batch size {1, 2, …, 64}. Two facts
+  changed the trade-offs: `BatchQueue::pickup()` only ever returns a full batch
+  or a single entry, and on the M4 the GPU saturates at 15b×192 with one batch
+  in flight (sweep in BENCHMARKS.md).
+- **Decision:**
+  - Each worker thread owns its slots (shared `MTLBuffer`s) for life. A
+    slot's states are that thread's program order, so no slot state is shared
+    between threads and there is no lock-free state machine.
+  - One set of compiled `MPSGraphExecutable`s is shared by all workers.
+    Encoding is serialized by a mutex in `MetalNetwork::run()`; execution
+    overlaps (`runAsync` + a completion semaphore per call).
+  - Only two graphs: batch 1 and `cfg_batch_size`. The network does not keep
+    the raw weights after compiling them.
+  - Defaults: 2 workers, batch 8, 16 search threads. A third worker
+    (triple buffering) measured no faster; batch 16 gave ~1% more throughput
+    for twice the threads.
+- **Consequences:** The scheduler is about 150 lines of plain C++ with no
+  Objective-C and no shared mutable slot state; TSan reports no races. GPU
+  memory holds two copies of the folded weights instead of seven. If
+  `BatchQueue` ever returns partial batches, the full-size slot still works
+  (unused rows are ignored), at the cost of computing padding. Step 2.7
+  (autotune) should revisit the batch size per network.

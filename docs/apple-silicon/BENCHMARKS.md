@@ -98,6 +98,40 @@ Thread-count sweep (4 runs each, medians; Accelerate BLAS):
   3,451 vs 3,299 (medians of 5). Small gain, within noise; kept to match the
   OpenBLAS/MKL behaviour of one BLAS thread per search thread.
 
+## Phase 2 step 2.4: MetalScheduler (batched, asynchronous) (2026-10-03)
+
+Random nets, M4, fp32. Interleaved, 3 runs, medians, n/s.
+
+| Network | CPU (Accelerate, 10 threads) | Metal 2.4 defaults (batch 8, 2 workers, 16 threads) | Metal / CPU | Metal batch 1 (`-t 1`) |
+|---------|-----------------------------:|----------------------------------------------------:|------------:|-----------------------:|
+| random 15b×192 | 198 | 326 | **1.65×** | 209 |
+| random 6b×64 | 3,117 | 5,850 | **1.88×** | 1,377 |
+
+Worker × batch sweep (threads = batch × workers, 2 runs each):
+
+| | B=4 | B=8 | B=16 | B=32 |
+|---|---:|---:|---:|---:|
+| 15b×192, W=1 | 284–321 | 330–343 | 344–348 | 350–352 |
+| 15b×192, W=2 | 339–348 | **349–353** | 341–351 | 340–347 |
+| 15b×192, W=3 | 284–342 | 349 | 331–338 | 326 |
+| 6b×64, W=1 | 3,351–3,459 | 4,089–4,288 | 4,937–4,951 | 4,600–4,810 |
+| 6b×64, W=2 | 5,040–5,328 | **5,750–5,803** | 5,865–6,167 | 6,240–6,485 |
+| 6b×64, W=3 | 4,954–5,281 | 5,713–5,890 | 5,299–6,089 | 5,890–6,213 |
+
+- 15b×192 is GPU-bound: every configuration with batch ≥ 8 plateaus near
+  350 n/s, even with one worker. That is ~2.6 TFLOPS of conv work (about 60%
+  of the GPU's fp32 peak), so fp16 (step 2.5) is the next lever, not deeper
+  pipelining.
+- The small net is CPU-side bound: a second worker adds ~25%, a third adds
+  nothing. Hence 2 workers, not the spec's triple buffering (ADR-007).
+- Batch-1 latency (`-t 1`): 209 n/s vs 179 for the 2.3 synchronous pipe, so
+  the asynchronous completion path costs nothing. The spec's spin-then-wait
+  mitigation is not needed.
+- Batching works: a debug run reported 188 full batches and 8 single
+  evaluations.
+- Peak memory footprint (15b×192, `-v 1600`): Metal 550 MB vs CPU 635 MB.
+  Not yet measured on 40b×256.
+
 ## Phase 2 step 2.3: Metal (MPSGraph, fp32, batch 1, synchronous) (2026-10-03)
 
 Random nets, M4, `--benchmark`, 3 runs each, n/s. The Metal pipe evaluates one

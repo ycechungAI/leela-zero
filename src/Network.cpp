@@ -56,7 +56,7 @@
 #include "CPUPipe.h"
 #include "Network.h"
 #ifdef USE_METAL
-#include "MetalPipe.h"
+#include "MetalScheduler.h"
 #endif
 #include "zlib.h"
 #ifdef USE_OPENCL
@@ -580,7 +580,7 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
         m_forward = init_net(channels, std::make_unique<CPUPipe>());
     } else {
         try {
-            auto pipe = std::make_unique<MetalPipe>();
+            auto pipe = std::make_unique<MetalScheduler>(cfg_batch_size);
             pipe->initialize(channels);
             myprintf("%s.\n", pipe->describe().c_str());
             pipe->push_weights(WINOGRAD_ALPHA, INPUT_CHANNELS, channels,

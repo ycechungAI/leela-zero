@@ -46,6 +46,14 @@
 #include "NNCache.h"
 #include "Network.h"
 #include "Platform.h"
+#ifdef USE_METAL
+#include "MetalScheduler.h"
+
+// Default search threads = batch x workers = 16. Batch 8 reaches ~99% of the
+// best measured throughput with half the threads of batch 16, and fewer
+// threads keep the search sharper (BENCHMARKS.md, step 2.4).
+static constexpr auto METAL_DEFAULT_BATCH = 8u;
+#endif
 #include "Random.h"
 #include "ThreadPool.h"
 #include "Utils.h"
@@ -79,20 +87,19 @@ static void calculate_thread_count_cpu(
     }
 }
 
-#if defined(USE_OPENCL) && !defined(USE_METAL)
+#if defined(USE_OPENCL) || defined(USE_METAL)
+// Default thread count, GPU case. `workers` is the number of batches the
+// backend keeps in flight (OpenCL: 2 per GPU; Metal: its worker threads).
+// 1) if no args are given, use default_batch and thread count of
+//    (batch size) * workers
+// 2) if number of threads are given, use batch size of
+//    (thread count) / workers
+// 3) if number of batches are given, use thread count of
+//    (batch size) * workers
 static void calculate_thread_count_gpu(
-    boost::program_options::variables_map& vm) {
+    boost::program_options::variables_map& vm, const size_t workers,
+    const unsigned int default_batch) {
     auto cfg_max_threads = size_t{MAX_CPUS};
-
-    // Default thread count : GPU case
-    // 1) if no args are given, use batch size of 5 and thread count of (batch size) * (number of gpus) * 2
-    // 2) if number of threads are given, use batch size of (thread count) / (number of gpus) / 2
-    // 3) if number of batches are given, use thread count of (batch size) * (number of gpus) * 2
-    auto gpu_count = cfg_gpus.size();
-    if (gpu_count == 0) {
-        // size of zero if autodetect GPU : default to 1
-        gpu_count = 1;
-    }
 
     if (vm["threads"].as<unsigned int>() > 0) {
         auto num_threads = vm["threads"].as<unsigned int>();
@@ -105,8 +112,7 @@ static void calculate_thread_count_gpu(
         if (vm["batchsize"].as<unsigned int>() > 0) {
             cfg_batch_size = vm["batchsize"].as<unsigned int>();
         } else {
-            cfg_batch_size =
-                (cfg_num_threads + (gpu_count * 2) - 1) / (gpu_count * 2);
+            cfg_batch_size = (cfg_num_threads + workers - 1) / workers;
 
             // no idea why somebody wants to use threads less than the number of GPUs
             // but should at least prevent crashing
@@ -118,11 +124,10 @@ static void calculate_thread_count_gpu(
         if (vm["batchsize"].as<unsigned int>() > 0) {
             cfg_batch_size = vm["batchsize"].as<unsigned int>();
         } else {
-            cfg_batch_size = 5;
+            cfg_batch_size = default_batch;
         }
 
-        cfg_num_threads =
-            std::min(cfg_max_threads, cfg_batch_size * gpu_count * 2);
+        cfg_num_threads = std::min(cfg_max_threads, cfg_batch_size * workers);
     }
 
     if (cfg_num_threads < cfg_batch_size) {
@@ -188,6 +193,12 @@ static void parse_commandline(const int argc, const char* const argv[]) {
 #endif
         ;
 #endif
+#if defined(USE_METAL) && !defined(USE_OPENCL)
+    po::options_description gpu_desc("Metal options");
+    gpu_desc.add_options()
+        ("batchsize", po::value<unsigned int>()->default_value(0),
+                      "Max batch size.  Select 0 to let leela-zero pick a reasonable default.");
+#endif
     po::options_description selfplay_desc("Self-play options");
     selfplay_desc.add_options()
         ("noise,n", "Enable policy network randomization.")
@@ -213,7 +224,7 @@ static void parse_commandline(const int argc, const char* const argv[]) {
     // These won't be shown, we use them to catch incorrect usage of the
     // command line.
     po::options_description ignore("Ignored options");
-#ifndef USE_OPENCL
+#if !defined(USE_OPENCL) && !defined(USE_METAL)
     ignore.add_options()
         ("batchsize", po::value<unsigned int>()->default_value(1),
                       "Max batch size.");
@@ -224,7 +235,7 @@ static void parse_commandline(const int argc, const char* const argv[]) {
     po::options_description visible;
     visible
         .add(gen_desc)
-#ifdef USE_OPENCL
+#if defined(USE_OPENCL) || defined(USE_METAL)
         .add(gpu_desc)
 #endif
         .add(selfplay_desc)
@@ -368,19 +379,19 @@ static void parse_commandline(const int argc, const char* const argv[]) {
     cfg_cpu_only = true;
 #endif
 
-#ifdef USE_METAL
-    // The Metal pipe is synchronous (step 2.3), so threads scale like CPU.
-    calculate_thread_count_cpu(vm);
-#else
     if (cfg_cpu_only) {
         calculate_thread_count_cpu(vm);
     } else {
-#ifdef USE_OPENCL
-        calculate_thread_count_gpu(vm);
+#if defined(USE_METAL)
+        calculate_thread_count_gpu(vm, MetalScheduler::DEFAULT_WORKERS,
+                                   METAL_DEFAULT_BATCH);
+        myprintf("Using Metal batch size of %d\n", cfg_batch_size);
+#elif defined(USE_OPENCL)
+        const auto gpu_count = std::max(cfg_gpus.size(), size_t{1});
+        calculate_thread_count_gpu(vm, gpu_count * 2, 5);
         myprintf("Using OpenCL batch size of %d\n", cfg_batch_size);
 #endif
     }
-#endif
     if (Platform::num_eff_cores() > 0) {
         myprintf("Using %d thread(s) (%d performance + %d efficiency cores).\n",
                  cfg_num_threads, Platform::num_perf_cores(),
