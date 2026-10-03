@@ -111,5 +111,5 @@ Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done
 | 2.7 | M | | ⬜ | | | |
 | 2.8 | S | | ⬜ | | | |
 | 2.9 | L / S | | ⬜ | | | |
-| 2.10 | L | Opus 5.5 | 🟡 | CI job `macOS arm64 / Metal`: build + ctest + G2 when the runner has a GPU (probe/parity steps run locally first) | `COMMIT` | Done early, on request. Nightly `parity-full` and a Metal ASan job still to do |
+| 2.10 | L | Opus 5.5 | 🟡 | CI job `macOS arm64 / Metal`: build + ctest + G2 when the runner has a GPU (probe/parity steps run locally first) | `7631ddc` | Done early, on request. Nightly `parity-full` and a Metal ASan job still to do |
 | 2.R | S | | ⬜ | | | |
