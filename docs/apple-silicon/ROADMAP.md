@@ -50,7 +50,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 
 1. ✅ Extract `BatchQueue.h` from `OpenCLScheduler`. No behavior change (it
    also fixes a spurious-wakeup race). Not sent upstream yet.
-2. `MetalContext`: device, queue, runtime MSL compile, and the `USE_METAL` CMake option.
+2. ✅ `MetalContext`: device, queue, runtime MSL compile, and the `USE_METAL` CMake option
+   (`cmake --preset macos-metal`).
 3. `MetalNetwork` via MPSGraph, fp32, fixed batch sizes, with BN folded into conv.
 4. `MetalScheduler`: shared-buffer slot ring, triple buffering, completion wakeups.
 5. Gate G2 (fp32). Then add fp16 + `--precision auto` + `USE_METAL_SELFCHECK`.

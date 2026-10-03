@@ -395,3 +395,24 @@ TEST(PlatformTest, CoreCountsAreSane) {
     EXPECT_FALSE(Platform::set_thread_qos_interactive());
 #endif
 }
+
+#ifdef USE_METAL
+#include "MetalContext.h"
+
+TEST(MetalContextTest, DeviceAndSelfTest) {
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+    EXPECT_FALSE(ctx->device_name().empty());
+    EXPECT_TRUE(ctx->has_unified_memory());
+    EXPECT_TRUE(ctx->supports_apple_gpu_family());
+    EXPECT_GE(ctx->max_threads_per_threadgroup(), 256u);
+    std::cout << ctx->describe() << std::endl;
+
+    EXPECT_TRUE(ctx->self_test(error)) << error;
+
+    // A broken shader must fail cleanly with a message, not crash.
+    EXPECT_FALSE(ctx->compile_check("kernel void broken( {", error));
+    EXPECT_FALSE(error.empty());
+}
+#endif

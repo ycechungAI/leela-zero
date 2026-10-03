@@ -28,6 +28,21 @@
       }
     },
     {
+      "name": "macos-metal",
+      "displayName": "macOS: Metal backend + CPU (Release)",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build-metal",
+      "cacheVariables": {
+        "USE_CPU_ONLY": "ON",
+        "USE_METAL": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
       "name": "macos-opencl",
       "displayName": "macOS: OpenCL GPU backend (Release, perf baseline)",
       "inherits": "base",
@@ -122,6 +137,14 @@
       ]
     },
     {
+      "name": "macos-metal",
+      "configurePreset": "macos-metal",
+      "targets": [
+        "leelaz",
+        "tests"
+      ]
+    },
+    {
       "name": "macos-opencl",
       "configurePreset": "macos-opencl",
       "targets": [
@@ -175,6 +198,13 @@
     {
       "name": "macos-cpu",
       "configurePreset": "macos-cpu",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-metal",
+      "configurePreset": "macos-metal",
       "output": {
         "outputOnFailure": true
       }

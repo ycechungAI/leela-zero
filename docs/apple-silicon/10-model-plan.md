@@ -103,7 +103,7 @@ Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done
 | Step | Planned | Used | Status | Gates passed | Commit | Notes |
 |------|:-------:|:----:|:------:|--------------|--------|-------|
 | 2.1 | S | Opus 5.5 | ✅ | ctest, OpenCL↔CPU parity 1.8e-7, TSan (batching + drain): 0 races | `5a4182f` | Also fixed a spurious-wakeup race in forward() |
-| 2.2 | M | | ⬜ | | | |
+| 2.2 | M | Sonnet 5.5 | ✅ | ctest (new `MetalContextTest` compiles and runs an MSL kernel on the M4 GPU via shared buffers), default build still green | `COMMIT` | Pure-C++ header, ObjC++ only in `src/metal/*.mm` (ARC). `USE_METAL` defaults OFF and errors off-Apple |
 | 2.3 | S→M | | ⬜ | | | |
 | 2.4 | S | | ⬜ | | | |
 | 2.5 | M | | ⬜ | | | |

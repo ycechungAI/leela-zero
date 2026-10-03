@@ -32,9 +32,17 @@ endif()
 option(USE_CPU_ONLY  "Build without the OpenCL GPU backend" OFF)
 option(USE_BLAS      "CPU inference via system BLAS (Accelerate on macOS, OpenBLAS elsewhere) instead of Eigen" ${_blas_default})
 option(USE_HALF      "OpenCL: enable half-precision support" OFF)
+option(USE_METAL     "Build the Metal GPU backend (macOS only)" OFF)
 option(LZ_NATIVE_ARCH "Optimize for the build machine's CPU (-march/-mcpu=native). Turn off for redistributable binaries" ON)
 set(LZ_SANITIZE "" CACHE STRING "Sanitizers to enable, e.g. address,undefined (empty = none)")
 option(LZ_BUILD_TESTS "Build the unit tests" ON)
+
+if(USE_METAL)
+  if(NOT APPLE)
+    message(FATAL_ERROR "USE_METAL requires macOS")
+  endif()
+  enable_language(OBJCXX)
+endif()
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -67,6 +75,11 @@ endif()
 file(GLOB LEELAZ_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*.cpp")
 list(REMOVE_ITEM LEELAZ_SOURCES "${PROJECT_SOURCE_DIR}/src/Leela.cpp")
 
+if(USE_METAL)
+  file(GLOB LEELAZ_METAL_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/metal/*.mm")
+  list(APPEND LEELAZ_SOURCES ${LEELAZ_METAL_SOURCES})
+endif()
+
 add_library(leelaz_core OBJECT ${LEELAZ_SOURCES})
 target_compile_features(leelaz_core PUBLIC cxx_std_17)
 set_target_properties(leelaz_core PROPERTIES CXX_EXTENSIONS OFF)
@@ -79,6 +92,7 @@ target_compile_definitions(leelaz_core PUBLIC
   $<$<BOOL:${USE_CPU_ONLY}>:USE_CPU_ONLY>
   $<$<BOOL:${USE_HALF}>:USE_HALF>
   $<$<BOOL:${USE_BLAS}>:USE_BLAS>
+  $<$<BOOL:${USE_METAL}>:USE_METAL>
   $<$<AND:$<BOOL:${USE_BLAS}>,$<PLATFORM_ID:Darwin>>:ACCELERATE_NEW_LAPACK>)
 
 if(NOT USE_CPU_ONLY)
@@ -86,6 +100,11 @@ if(NOT USE_CPU_ONLY)
   if(APPLE)
     target_compile_definitions(leelaz_core PUBLIC CL_SILENCE_DEPRECATION)
   endif()
+endif()
+if(USE_METAL)
+  target_include_directories(leelaz_core PUBLIC "${PROJECT_SOURCE_DIR}/src/metal")
+  target_compile_options(leelaz_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+  target_link_libraries(leelaz_core PUBLIC "-framework Metal" "-framework Foundation")
 endif()
 if(USE_BLAS)
   if(APPLE)

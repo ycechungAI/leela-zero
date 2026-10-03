@@ -63,7 +63,7 @@ CLion and VS Code pick up automatically:
 
 ```bash
 cmake --list-presets
-cmake --preset macos-cpu            # or macos-opencl, macos-debug, macos-asan, macos-dist
+cmake --preset macos-cpu            # or macos-opencl, macos-metal (Metal context only until Phase 2 lands), macos-debug, macos-asan, macos-dist
 cmake --build --preset macos-cpu
 ctest --preset macos-cpu            # unit tests; works from any directory
 ```
