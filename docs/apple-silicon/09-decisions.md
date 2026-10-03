@@ -64,3 +64,20 @@
   `std::invoke_result_t`). GCC 7+, Clang 5+ and MSVC 2017+ all support it.
 - **Consequences:** The VS2015 AppVeyor image can no longer build. ObjC++ files
   in `src/metal` use the same standard.
+
+## ADR-006: One build system (CMake + presets) on every platform
+
+- **Status:** Accepted (Phase 0)
+- **Context:** The repo carried five overlapping build/CI paths: CMake, a
+  hand-written `src/Makefile`, Visual Studio 2015/2017 solutions with NuGet
+  packages, AppVeyor and Travis (with Ubuntu 16.04 Dockerfiles). All but CMake
+  were stale (C++14, dead services, EOL images), and the vendored
+  `cmake/Modules` shadowed CMake's own newer find-modules.
+- **Decision:** CMake is the only build system. `CMakePresets.json` holds the
+  per-platform configurations, and vcpkg manifest mode supplies Windows
+  dependencies. One GitHub Actions workflow covers macOS arm64, Linux and
+  Windows. Legacy files are deleted rather than kept "just in case".
+- **Consequences:** Windows users need VS 2019+ and vcpkg instead of opening a
+  `.sln`. There are no Docker images until someone needs one; a single modern
+  Dockerfile can be added and built in CI then. Fewer moving parts means less
+  to keep green.

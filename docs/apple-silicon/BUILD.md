@@ -37,7 +37,7 @@ Everything lives in `scripts/macos/`. Pass `-h` to any script for its usage.
 
 | Script | Purpose |
 |--------|---------|
-| `build.sh [cpu\|opencl\|debug\|asan] [--clean] [--no-test]` | Configure, build and test one configuration |
+| `build.sh [cpu\|opencl\|debug\|asan\|dist] [--clean] [--no-test]` | Configure, build and test one configuration |
 | `start.sh [-w net] [-b cpu\|opencl] [-t threads] [-v visits] [-- leelaz args]` | Run `leelaz` in GTP mode, for GUIs or by hand |
 | `debug.sh lldb\|asan\|tests\|smoke` | Debugger, sanitizers, unit tests under lldb, quick smoke test |
 | `train.sh selfplay\|sgf\|split\|fit` | Training-data workflow (section 6) |
@@ -48,10 +48,11 @@ Each configuration gets its own build directory, so they don't clobber each othe
 
 | Config | Directory | Notes |
 |--------|-----------|-------|
-| `cpu` (default) | `build/` | Release, `-O3 -flto`, Accelerate BLAS. **Use this one** |
+| `cpu` (default) | `build/` | Release, LTO, `-mcpu=native`, Accelerate BLAS. **Use this one** |
 | `opencl` | `build-opencl/` | Release, OpenCL GPU backend. Deprecated by Apple; kept as the speed baseline |
 | `debug` | `build-debug/` | `-Og -g`, no LTO, for lldb |
 | `asan` | `build-asan/` | Debug + AddressSanitizer + UBSan |
+| `dist` | `build-dist/` | Release with `-mcpu=apple-m1` instead of `native`, so the binary runs on any Apple Silicon Mac. Use it for binaries you hand to others |
 
 Generated data goes in `data/` and logs go in `logs/`. Git ignores both.
 
@@ -62,9 +63,9 @@ CLion and VS Code pick up automatically:
 
 ```bash
 cmake --list-presets
-cmake --preset macos-cpu            # or macos-opencl, macos-debug, macos-asan
+cmake --preset macos-cpu            # or macos-opencl, macos-debug, macos-asan, macos-dist
 cmake --build --preset macos-cpu
-cd build && ./tests
+ctest --preset macos-cpu            # unit tests; works from any directory
 ```
 
 ## 3. Get a network
@@ -237,7 +238,7 @@ It exits 1 when a difference exceeds the tolerance, so it can be used in CI
 |---------|-------------|
 | `Compatibility with CMake < 3.5 has been removed` | You're on upstream `next`. Use this fork's branch, which fixes it |
 | `no template named 'optional' in namespace 'std'` (boost/spirit/x3) | C++14 build against new Boost. This branch builds with C++17 |
-| `Could not open weights file: ../src/tests/0k.txt` | Run `tests` from inside its build directory (`build.sh` does this) |
+| `Could not open weights file: ../src/tests/0k.txt` | Run the tests with `ctest --preset <name>` (it sets the working directory), or run `tests` from `src/` |
 | `A network weights file is required` | See section 3, or use `make_random_net.py` for testing |
 | Tests or the first OpenCL run take minutes | The OpenCL tuner is running. The result is cached in `~/.local/share/leela-zero/leelaz_opencl_tuning`. Delete that file to re-tune |
 | `unknown warning option '-Wno-maybe-uninitialized'` | Old CMakeLists. Fixed on this branch (GCC-only flag now) |
@@ -289,4 +290,4 @@ Notes:
 | OpenCL tuning cache | `~/.local/share/leela-zero/leelaz_opencl_tuning` |
 | Script logs | `logs/` (repo root) |
 | Training data | `data/` (repo root), or `$LZ_TRAIN_DATA` |
-| Builds | `build/`, `build-opencl/`, `build-debug/`, `build-asan/` |
+| Builds | `build/`, `build-opencl/`, `build-debug/`, `build-asan/`, `build-dist/` |

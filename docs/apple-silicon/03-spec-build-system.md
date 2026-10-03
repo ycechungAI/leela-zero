@@ -6,7 +6,24 @@
 
 The upstream build doesn't configure on the M4 (blockers B1–B5 in 00-repo-overview).
 
-## 2. Changes
+## Implementation status (Phase 0, branch `apple-silicon`)
+
+Done. The as-built design differs from the plan below in these ways:
+- `CMakeLists.txt` was rewritten target-based: `leelaz_core` OBJECT library,
+  imported targets (`Boost::program_options`, `ZLIB::ZLIB`, `OpenCL::OpenCL`,
+  `BLAS::BLAS`), IPO in Release only, and options `USE_CPU_ONLY`, `USE_BLAS`
+  (default ON on macOS), `USE_HALF`, `LZ_NATIVE_ARCH`, `LZ_SANITIZE`,
+  `LZ_BUILD_TESTS`. Minimum CMake is 3.21, which presets need.
+- The vendored `cmake/Modules` were deleted. Boost.Filesystem was replaced by
+  `std::filesystem`, so `program_options` is the only compiled Boost library.
+- One build system: `src/Makefile`, `msvc/`, AppVeyor, Travis and the Ubuntu
+  16.04 Dockerfiles were removed. Windows builds with CMake + vcpkg
+  (`vcpkg.json`). CI is `.github/workflows/ci.yml` (macOS, Linux, Windows).
+- `ctest` runs the unit tests from any build directory.
+- `USE_METAL` / `USE_COREML` options arrive with their phases.
+- The Qt 6 port of autogtp/validation is pending. CMake only looks for Qt 6.
+
+## 2. Changes (original plan)
 
 ### 2.1 CMake modernization (`CMakeLists.txt`)
 

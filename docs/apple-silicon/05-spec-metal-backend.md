@@ -153,4 +153,4 @@ On first run per (net shape, device), time batch sizes {8, 16, 32, 64} ×
 | MPSGraph graph compile time per batch size is slow at startup | Med | Compile lazily per batch size on first use. Cache executables (`MPSGraphExecutable serialize` on macOS 14+) |
 | Completion-handler wake latency hurts batch-1 play | Med | Use `MTLSharedEvent` + spin-then-wait for batch ≤ 2 |
 | fp16 overflow in value head on some nets | Low | Run FC layers in fp32 (mixed graph) |
-| Objective-C++ in a C++14 codebase | Low | Keep ObjC confined to `src/metal/*.mm`, behind a pure C++ header (pimpl) |
+| Objective-C++ in a C++17 codebase | Low | Keep ObjC confined to `src/metal/*.mm`, behind a pure C++ header (pimpl) |

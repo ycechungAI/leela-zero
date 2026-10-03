@@ -1,5 +1,4 @@
-[![Linux Build Status](https://travis-ci.org/leela-zero/leela-zero.svg?branch=next)](https://travis-ci.org/leela-zero/leela-zero)
-[![Windows Build Status](https://ci.appveyor.com/api/projects/status/dcvp31x1e0yavrtf/branch/next?svg=true)](https://ci.appveyor.com/project/gcp/leela-zero-8arv1/branch/next)
+[![CI](https://github.com/ycechungAI/leela-zero/actions/workflows/ci.yml/badge.svg?branch=apple-silicon)](https://github.com/ycechungAI/leela-zero/actions/workflows/ci.yml)
 
 # What
 
@@ -83,22 +82,26 @@ the compilation instructions below and then read the [Usage](#usage-for-playing-
 
 # Compiling AutoGTP and/or Leela Zero
 
+One build system everywhere: CMake (3.21+) with presets. `cmake --list-presets`
+shows what's available on your OS.
+
 ## Requirements
 
-* GCC, Clang or MSVC, any C++14 compiler
-* Boost 1.58.x or later, headers and program_options, filesystem and system libraries (libboost-dev, libboost-program-options-dev and libboost-filesystem-dev on Debian/Ubuntu)
-* zlib library (zlib1g & zlib1g-dev on Debian/Ubuntu)
-* Standard OpenCL C headers (opencl-headers on Debian/Ubuntu, or at
-https://github.com/KhronosGroup/OpenCL-Headers/tree/master/CL)
-* OpenCL ICD loader (ocl-icd-libopencl1 on Debian/Ubuntu, or reference implementation at https://github.com/KhronosGroup/OpenCL-ICD-Loader)
-* An OpenCL capable device, preferably a very, very fast GPU, with recent
-drivers is strongly recommended (OpenCL 1.1 support is enough). Don't
-forget to install the OpenCL driver if this part is packaged seperately
-by the Linux distribution (e.g. nvidia-opencl-icd).
-If you do not have a GPU, add the define "USE_CPU_ONLY", for example
-by adding -DUSE_CPU_ONLY=1 to the cmake command line.
-* Optional: BLAS Library: OpenBLAS (libopenblas-dev) or Intel MKL
-* The program has been tested on Windows, Linux and macOS.
+* A C++17 compiler: GCC 9+, Clang 10+, Apple clang 14+ or MSVC 2019+
+* CMake 3.21 or later
+* Boost 1.70 or later: headers and the program_options library
+  (libboost-program-options-dev on Debian/Ubuntu)
+* zlib (zlib1g-dev on Debian/Ubuntu)
+* For the GPU backend: OpenCL headers and ICD loader (opencl-headers and
+ocl-icd-opencl-dev on Debian/Ubuntu) plus an OpenCL driver for your GPU
+(OpenCL 1.1 is enough). Without a GPU, configure with `-DUSE_CPU_ONLY=ON`.
+* Optional: BLAS for faster CPU inference (`-DUSE_BLAS=ON`). Accelerate is
+used on macOS (on by default there), OpenBLAS (libopenblas-dev) elsewhere.
+* Optional: Qt 6 (Core) to build `autogtp` and `validation`.
+
+Useful options: `USE_CPU_ONLY`, `USE_BLAS`, `USE_HALF`, `LZ_NATIVE_ARCH`
+(default ON; turn OFF for redistributable binaries), `LZ_SANITIZE`
+(e.g. `address,undefined`), `LZ_BUILD_TESTS`.
 
 ## Example of compiling - Ubuntu & similar
 
@@ -110,53 +113,42 @@ by adding -DUSE_CPU_ONLY=1 to the cmake command line.
     cd leela-zero
     git submodule update --init --recursive
 
-    # Install build depedencies
-    sudo apt install cmake g++ libboost-dev libboost-program-options-dev libboost-filesystem-dev opencl-headers ocl-icd-libopencl1 ocl-icd-opencl-dev zlib1g-dev
+    # Install build dependencies
+    sudo apt install cmake g++ libboost-program-options-dev zlib1g-dev \
+        opencl-headers ocl-icd-opencl-dev
 
-    # Use a stand alone build directory to keep source dir clean
-    mkdir build && cd build
+    # Configure, build and test (GPU build; add -DUSE_CPU_ONLY=ON without a GPU)
+    cmake -S . -B build
+    cmake --build build -j
+    ctest --test-dir build
 
-    # Compile leelaz and autogtp in build subdirectory with cmake
-    cmake ..
-    cmake --build .
-
-    # Optional: test if your build works correctly
-    ./tests
+    # Or the CPU-only OpenBLAS preset
+    sudo apt install libopenblas-dev
+    cmake --preset linux-cpu && cmake --build --preset linux-cpu && ctest --preset linux-cpu
 
 ## Example of compiling - macOS
 
-> **Apple Silicon (M1–M4):** see [docs/apple-silicon/BUILD.md](docs/apple-silicon/BUILD.md)
-> for the arm64 build, run, debug and training scripts (`scripts/macos/`).
+On Apple Silicon (M1–M4), see [docs/apple-silicon/BUILD.md](docs/apple-silicon/BUILD.md)
+for the full guide and the helper scripts in `scripts/macos/`. In short:
 
-    # Clone github repo
     git clone https://github.com/leela-zero/leela-zero
     cd leela-zero
-    git submodule update --init --recursive
-
-    # Install build depedencies
-    brew install boost cmake zlib
-
-    # Use a stand alone build directory to keep source dir clean
-    mkdir build && cd build
-
-    # Compile leelaz and autogtp in build subdirectory with cmake
-    cmake ..
-    cmake --build .
-
-    # Optional: test if your build works correctly
-    ./tests
+    brew install cmake boost
+    scripts/macos/build.sh            # or: cmake --preset macos-cpu && cmake --build --preset macos-cpu
 
 ## Example of compiling - Windows
 
-    # Clone github repo
+Requires Visual Studio 2019 or 2022 (with "Desktop development with C++") and
+[vcpkg](https://vcpkg.io). Dependencies come from `vcpkg.json` automatically.
+
     git clone https://github.com/leela-zero/leela-zero
     cd leela-zero
     git submodule update --init --recursive
 
-    cd msvc
-    Double-click the leela-zero2015.sln or leela-zero2017.sln corresponding
-    to the Visual Studio version you have.
-    # Build from Visual Studio 2015 or 2017
+    # In a "Developer PowerShell for VS", with VCPKG_INSTALLATION_ROOT pointing at vcpkg
+    cmake --preset windows-cpu
+    cmake --build --preset windows-cpu
+    ctest --preset windows-cpu
 
 # Contributing
 
