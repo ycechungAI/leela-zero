@@ -29,7 +29,7 @@ The upstream build doesn't configure on the M4 (blockers B1–B5 in 00-repo-over
   Repoint it to `https://gitlab.com/libeigen/eigen.git` at tag **3.4.0**,
   which has better NEON (aarch64) GEMM kernels and fixes for clang ≥ 15.
   Verify bit-identical CPU results against 3.3 on the 0k test (spec 07, gate G1).
-- `gtest`: bump to `v1.14.x`. The old commit uses `std::tr1` paths that warn on
+- `gtest`: bump to `v1.15.2` (done). The old commit uses `std::tr1` paths that warn on
   clang 21.
 - Add a `BUILD.md` step: `git submodule update --init --recursive`.
 
