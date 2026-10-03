@@ -409,7 +409,26 @@ TEST(PlatformTest, CoreCountsAreSane) {
 #include <atomic>
 #include <thread>
 
+// GitHub's macOS runners are virtual machines and may have no usable Metal
+// device. Skip there instead of failing; on a real Mac these always run.
+static bool metal_available(std::string& why) {
+    std::string error;
+    if (MetalContext::create(error)) {
+        return true;
+    }
+    why = error;
+    return false;
+}
+#define SKIP_WITHOUT_METAL()                                                   \
+    do {                                                                       \
+        std::string why_;                                                      \
+        if (!metal_available(why_)) {                                          \
+            GTEST_SKIP() << "no Metal device: " << why_;                       \
+        }                                                                      \
+    } while (0)
+
 TEST(MetalContextTest, DeviceAndSelfTest) {
+    SKIP_WITHOUT_METAL();
     std::string error;
     const auto ctx = MetalContext::create(error);
     ASSERT_NE(ctx, nullptr) << error;
@@ -458,6 +477,7 @@ static std::shared_ptr<ForwardPipe::ForwardPipeWeights> make_test_weights(
 }
 
 TEST(MetalNetworkTest, MatchesCpuAndBatchesConsistently) {
+    SKIP_WITHOUT_METAL();
     constexpr auto C = 8;
     constexpr auto blocks = 2;
     constexpr auto N = 4;
@@ -551,6 +571,7 @@ static float max_diff(const std::vector<float>& a, const std::vector<float>& b) 
 // Many search threads, each input distinct: any mix-up between batch rows,
 // slots or waiting threads shows up as a wrong answer.
 TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
+    SKIP_WITHOUT_METAL();
     constexpr auto C = 32;
     constexpr auto blocks = 2;
     constexpr auto threads = 12;
@@ -596,6 +617,7 @@ TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
 // drain() releases every waiting thread with NetworkHaltException, and the
 // scheduler works again after resume().
 TEST(MetalSchedulerTest, DrainReleasesWaitersAndResumeRestarts) {
+    SKIP_WITHOUT_METAL();
     constexpr auto C = 32;
     constexpr auto blocks = 2;
     constexpr auto threads = 10;

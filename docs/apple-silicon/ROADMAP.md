@@ -62,7 +62,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 8. Optional 2b: `forward_into` zero-staging input path.
 9. Benchmark. If MPSGraph is under target by more than 15%, start the custom
    MSL Winograd fallback (ADR-001).
-10. CI `build-metal`, nightly `parity-full` and `asan`.
+10. 🟡 CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU) ✅;
+    nightly `parity-full` and Metal `asan` still to do.
 
 **Exit:** ≥2.5× OpenCL on 40b×256, G2/G3/G4 pass, and the soak test is clean.
 Tag `as.2`.
