@@ -37,7 +37,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 1. `src/Platform.h`: core counts, QoS, and feature detection.
 2. Accelerate as the default BLAS, single-threaded per call, with a startup log line.
 3. Default `-t` and QoS for P/E cores.
-4. NEON-friendly Winograd transforms and a fused BN+ReLU+residual pass.
+4. 🟡 NEON-friendly Winograd transforms ✅ (1.26× single-thread on a random
+   15b×192). Fused BN+ReLU+residual pass still to do (step 1.4b).
 5. Gate G1 + benchmark.
 
 **Exit:** ≥1.5× Eigen on 15b×192, and G1 passes. Tag `as.1`.
@@ -46,8 +47,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 
 > Model per step and tracking: [10-model-plan.md](10-model-plan.md).
 
-1. Extract `BatchQueue.h` from `OpenCLScheduler`. No behavior change, and it is
-   sent upstream as well.
+1. ✅ Extract `BatchQueue.h` from `OpenCLScheduler`. No behavior change (it
+   also fixes a spurious-wakeup race). Not sent upstream yet.
 2. `MetalContext`: device, queue, runtime MSL compile, and the `USE_METAL` CMake option.
 3. `MetalNetwork` via MPSGraph, fp32, fixed batch sizes, with BN folded into conv.
 4. `MetalScheduler`: shared-buffer slot ring, triple buffering, completion wakeups.

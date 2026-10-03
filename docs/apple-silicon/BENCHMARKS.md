@@ -34,12 +34,44 @@ Observations:
   was slower (1,248 vs 1,468), but 5 interleaved runs showed that was noise.
   **Lesson:** always interleave runs and use ≥5 samples.
 
+## Phase 1 step 1.4a: vectorized Winograd transforms (2026-10-03)
+
+Random networks again, so the numbers are relative. Same protocol, but A/B
+interleaved: the pre-change binary (`d9c8ded`) and the new one alternate, 5
+rounds each. Accelerate BLAS, Release, `-O3 -flto -mcpu=native`.
+
+| Network | Threads | Before n/s (median) | After n/s (median) | Speedup |
+|---------|--------:|--------------------:|-------------------:|--------:|
+| random 15b×192 | 1 (`-v 300`) | 62 | 78 | **1.26×** |
+| random 15b×192 | 10 (default, `-v 1600`) | 184 | 207 | 1.13× |
+| random 6b×64 | 10 (default, `-v 1600`) | 2,642 | 3,198 | 1.21× |
+
+Observations:
+- Profile (`sample`, 15b×192, `-t 1`): the transforms were 48% of CPU time
+  (24% in, 24% out) before and about 40% after, with sgemm most of the rest.
+  They are about 1.5× faster per eval, not 4×. They are now limited by stores,
+  not math: `transform_in` scatters each 4-channel result into V's
+  `[element][channel][tile]` layout one lane at a time.
+- Tried and rejected: a `[element][tile][channel]` V layout, where each result
+  is one vector store and sgemm reads B transposed. It was 9% slower overall
+  (71 vs 78 n/s), because the stores land in a new cache line each time.
+  Fixing that properly means an NHWC-blocked restructure. Not worth it before
+  Metal (Phase 2) takes over inference.
+- Tried and rejected: fixed-trip-count store fast paths. No measurable
+  change.
+- Multi-thread gains are smaller, because 10 threads share memory bandwidth
+  and include the E-cores.
+
 ## Numerical parity
 
 | Gate | Compared | Network / positions | max abs Δ prior | max abs Δ winrate | Result |
 |------|----------|---------------------|----------------:|------------------:|--------|
 | G1 | Accelerate vs Eigen 3.3 | random 6×64, 8 positions × 8 symmetries | 5.6e-9 | 1.5e-7 | PASS (tol 1e-5) |
 | — | Eigen 3.4 vs Eigen 3.3 | same | 9.3e-10 | 6.0e-8 | PASS (tol 1e-5) |
+| G1 | 1.4a vectorized vs pre-change (Accelerate) | random 15b×192, 3 positions × 8 symmetries | 3.7e-7 | 0 | PASS (tol 1e-5) |
+| G1 | 1.4a vectorized vs pre-change (Accelerate) | random 6b×64, same | 2.8e-9 | 1.2e-7 | PASS (tol 1e-5) |
+| G1 | 1.4a vectorized (Accelerate) vs Eigen 3.4 | random 15b×192, same | 3.4e-7 | 0 | PASS (tol 1e-5) |
+| G1 | 1.4a scalar fallback (MSVC path) vs pre-change | random 6b×64, 2 positions × 8 symmetries | 3.0e-9 | 6.0e-8 | PASS (tol 1e-5) |
 
 ## Official baseline (to do)
 
