@@ -35,7 +35,19 @@
 #define CL_HPP_MINIMUM_OPENCL_VERSION 110
 #define CL_HPP_TARGET_OPENCL_VERSION  120
 #define CL_HPP_ENABLE_EXCEPTIONS
+// The bundled cl2.hpp wraps OpenCL 1.1 APIs that newer SDKs mark deprecated.
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#pragma GCC diagnostic ignored "-Wdeprecated-copy"
+#if defined(__clang__)
+#pragma GCC diagnostic ignored "-Wdeprecated-copy-with-user-provided-copy"
+#endif
+#endif
 #include <CL/cl2.hpp>
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 #include <cassert>
 #include <cstddef>
 #include <memory>

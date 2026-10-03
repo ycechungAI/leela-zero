@@ -29,10 +29,10 @@
 
 #include "config.h"
 
-#include <boost/filesystem.hpp>
 #include <boost/math/distributions/students_t.hpp>
 #include <cstdarg>
 #include <cstdio>
+#include <filesystem>
 #include <mutex>
 
 #include "Utils.h"
@@ -216,7 +216,7 @@ size_t Utils::ceilMultiple(const size_t a, const size_t b) {
 
 std::string Utils::leelaz_file(const std::string& file) {
 #if defined(_WIN32) || defined(__ANDROID__)
-    boost::filesystem::path dir(boost::filesystem::current_path());
+    std::filesystem::path dir(std::filesystem::current_path());
 #else
     // https://stackoverflow.com/a/26696759
     const char* homedir;
@@ -228,10 +228,10 @@ std::string Utils::leelaz_file(const std::string& file) {
         }
         homedir = pwd->pw_dir;
     }
-    boost::filesystem::path dir(homedir);
+    std::filesystem::path dir(homedir);
     dir /= ".local/share/leela-zero";
 #endif
-    boost::filesystem::create_directories(dir);
+    std::filesystem::create_directories(dir);
     dir /= file;
     return dir.string();
 }

@@ -1,4 +1,4 @@
-name: apple-silicon
+name: ci
 
 on:
   push:
@@ -25,13 +25,12 @@ jobs:
           cmake --preset macos-cpu
           cmake --build --preset macos-cpu -j"$(sysctl -n hw.ncpu)"
       - name: Unit tests
-        working-directory: build
-        run: ./tests
+        run: ctest --preset macos-cpu
       - name: GTP smoke test (random network)
         run: scripts/macos/debug.sh smoke
       - name: Build Eigen-only reference
         run: |
-          cmake -S . -B build-eigen -DUSE_CPU_ONLY=1 -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build-eigen -DUSE_CPU_ONLY=ON -DUSE_BLAS=OFF -DLZ_BUILD_TESTS=OFF
           cmake --build build-eigen -j"$(sysctl -n hw.ncpu)" --target leelaz
       - name: Parity gate G1 (Accelerate vs Eigen)
         run: |
@@ -56,11 +55,10 @@ jobs:
           cmake --preset macos-asan
           cmake --build --preset macos-asan -j"$(sysctl -n hw.ncpu)"
       - name: Unit tests
-        working-directory: build-asan
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: ./tests
+        run: ctest --preset macos-asan
 
   macos-opencl:
     name: macOS arm64 / OpenCL (compile only)
@@ -87,11 +85,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake libboost-program-options-dev \
-              libboost-filesystem-dev libopenblas-dev zlib1g-dev
+              libopenblas-dev zlib1g-dev
       - name: Build
         run: |
           cmake --preset linux-cpu
           cmake --build --preset linux-cpu -j"$(nproc)"
       - name: Unit tests
-        working-directory: build
-        run: ./tests
+        run: ctest --preset linux-cpu
+
+  windows-cpu:
+    name: Windows x64 / CPU (Eigen, vcpkg)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build
+        run: |
+          cmake --preset windows-cpu
+          cmake --build --preset windows-cpu
+      - name: Unit tests
+        run: ctest --preset windows-cpu

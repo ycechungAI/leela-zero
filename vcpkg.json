@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "leela-zero",
+  "version-string": "0.17",
+  "description": "Dependencies for Windows builds (CMake + vcpkg manifest mode). Not used on macOS/Linux.",
+  "dependencies": [
+    "boost-algorithm",
+    "boost-format",
+    "boost-math",
+    "boost-program-options",
+    "boost-scope-exit",
+    "boost-spirit",
+    "boost-utility",
+    "zlib"
+  ]
+}

@@ -30,10 +30,10 @@
 #include "config.h"
 
 #include <algorithm>
-#include <boost/filesystem.hpp>
 #include <boost/format.hpp>
 #include <boost/program_options.hpp>
 #include <cstdint>
+#include <filesystem>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -305,7 +305,7 @@ static void parse_commandline(const int argc, const char* const argv[]) {
 
     cfg_weightsfile = vm["weights"].as<std::string>();
     if (vm["weights"].defaulted()
-        && !boost::filesystem::exists(cfg_weightsfile)) {
+        && !std::filesystem::exists(cfg_weightsfile)) {
         printf("A network weights file is required to use the program.\n");
         printf("By default, Leela Zero looks for it in %s.\n",
                cfg_weightsfile.c_str());

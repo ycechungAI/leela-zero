@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Build leelaz + unit tests on Apple Silicon.
 #
-#   scripts/macos/build.sh [cpu|opencl|debug|asan] [--clean] [--no-test]
+#   scripts/macos/build.sh [cpu|opencl|debug|asan|dist] [--clean] [--no-test]
 #
 #   cpu     Release, CPU only, Accelerate BLAS (default)
 #   opencl  Release, OpenCL GPU backend (deprecated on macOS; perf baseline)
 #   debug   Debug (-Og -g), CPU only, for lldb
 #   asan    Debug + AddressSanitizer/UBSan, CPU only
+#   dist    Release, CPU only, -mcpu=apple-m1 (runs on any Apple Silicon Mac)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 require_macos_arm64
@@ -14,7 +15,7 @@ require_macos_arm64
 CFG="cpu"; CLEAN=0; RUN_TESTS=1
 for arg in "$@"; do
     case "$arg" in
-        cpu|opencl|debug|asan) CFG="$arg" ;;
+        cpu|opencl|debug|asan|dist) CFG="$arg" ;;
         --clean)   CLEAN=1 ;;
         --no-test) RUN_TESTS=0 ;;
         -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
@@ -34,26 +35,18 @@ fi
 BUILD_DIR="$(build_dir_for "$CFG")"
 [[ $CLEAN -eq 1 ]] && { info "removing $BUILD_DIR"; rm -rf "$BUILD_DIR"; }
 
-CMAKE_ARGS=(-DUSE_BLAS=1)
-case "$CFG" in
-    cpu)    CMAKE_ARGS+=(-DUSE_CPU_ONLY=1 -DCMAKE_BUILD_TYPE=Release) ;;
-    opencl) CMAKE_ARGS+=(-DCMAKE_BUILD_TYPE=Release) ;;
-    debug)  CMAKE_ARGS+=(-DUSE_CPU_ONLY=1 -DCMAKE_BUILD_TYPE=Debug) ;;
-    asan)   CMAKE_ARGS+=(-DUSE_CPU_ONLY=1 -DCMAKE_BUILD_TYPE=Debug
-                         "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer"
-                         "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined") ;;
-esac
+# Each config maps to a preset in CMakePresets.json.
+PRESET="macos-$CFG"
 
-info "configuring ($CFG) in ${BUILD_DIR#$REPO_ROOT/}"
-cmake -S . -B "$BUILD_DIR" "${CMAKE_ARGS[@]}" >/dev/null
+info "configuring ($PRESET) in ${BUILD_DIR#$REPO_ROOT/}"
+cmake --preset "$PRESET" >/dev/null
 
 info "building leelaz and tests"
-cmake --build "$BUILD_DIR" -j"$(sysctl -n hw.ncpu)" --target leelaz tests
+cmake --build --preset "$PRESET" -j"$(sysctl -n hw.ncpu)"
 
 if [[ $RUN_TESTS -eq 1 ]]; then
     info "running unit tests"
-    # The tests load ../src/tests/0k.txt, so run them from the build dir.
-    (cd "$BUILD_DIR" && ./tests --gtest_brief=1)
+    ctest --preset "$PRESET"
 fi
 
 info "done: ${BUILD_DIR#$REPO_ROOT/}/leelaz"

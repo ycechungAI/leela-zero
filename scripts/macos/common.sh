@@ -14,7 +14,8 @@ build_dir_for() {
         opencl) echo "$REPO_ROOT/build-opencl" ;;
         debug)  echo "$REPO_ROOT/build-debug" ;;
         asan)   echo "$REPO_ROOT/build-asan" ;;
-        *)      die "unknown build config '$1' (expected cpu|opencl|debug|asan)" ;;
+        dist)   echo "$REPO_ROOT/build-dist" ;;
+        *)      die "unknown build config '$1' (expected cpu|opencl|debug|asan|dist)" ;;
     esac
 }
 

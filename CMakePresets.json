@@ -1,63 +1,226 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "base",
       "hidden": true,
-      "cacheVariables": { "USE_BLAS": "ON" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     },
     {
       "name": "macos-cpu",
       "displayName": "macOS: CPU only, Accelerate (Release)",
       "inherits": "base",
       "binaryDir": "${sourceDir}/build",
-      "cacheVariables": { "USE_CPU_ONLY": "ON", "CMAKE_BUILD_TYPE": "Release" },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+      "cacheVariables": {
+        "USE_CPU_ONLY": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
     },
     {
       "name": "macos-opencl",
       "displayName": "macOS: OpenCL GPU backend (Release, perf baseline)",
       "inherits": "base",
       "binaryDir": "${sourceDir}/build-opencl",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "macos-dist",
+      "displayName": "macOS: CPU only, redistributable (-mcpu=apple-m1)",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build-dist",
+      "cacheVariables": {
+        "USE_CPU_ONLY": "ON",
+        "LZ_NATIVE_ARCH": "OFF"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
     },
     {
       "name": "macos-debug",
       "displayName": "macOS: CPU only, Debug (for lldb)",
-      "inherits": "base",
       "binaryDir": "${sourceDir}/build-debug",
-      "cacheVariables": { "USE_CPU_ONLY": "ON", "CMAKE_BUILD_TYPE": "Debug" },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+      "cacheVariables": {
+        "USE_CPU_ONLY": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
     },
     {
       "name": "macos-asan",
       "displayName": "macOS: CPU only, Debug + AddressSanitizer/UBSan",
-      "inherits": "base",
       "binaryDir": "${sourceDir}/build-asan",
       "cacheVariables": {
         "USE_CPU_ONLY": "ON",
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
-        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+        "LZ_SANITIZE": "address,undefined"
       },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
     },
     {
       "name": "linux-cpu",
       "displayName": "Linux: CPU only, OpenBLAS (Release)",
       "inherits": "base",
       "binaryDir": "${sourceDir}/build",
-      "cacheVariables": { "USE_CPU_ONLY": "ON", "CMAKE_BUILD_TYPE": "Release" },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+      "cacheVariables": {
+        "USE_CPU_ONLY": "ON",
+        "USE_BLAS": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "windows-cpu",
+      "displayName": "Windows: CPU only, Eigen (vcpkg)",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "USE_CPU_ONLY": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "macos-cpu", "configurePreset": "macos-cpu", "targets": ["leelaz", "tests"] },
-    { "name": "macos-opencl", "configurePreset": "macos-opencl", "targets": ["leelaz", "tests"] },
-    { "name": "macos-debug", "configurePreset": "macos-debug", "targets": ["leelaz", "tests"] },
-    { "name": "macos-asan", "configurePreset": "macos-asan", "targets": ["leelaz", "tests"] },
-    { "name": "linux-cpu", "configurePreset": "linux-cpu", "targets": ["leelaz", "tests"] }
+    {
+      "name": "macos-cpu",
+      "configurePreset": "macos-cpu",
+      "targets": [
+        "leelaz",
+        "tests"
+      ]
+    },
+    {
+      "name": "macos-opencl",
+      "configurePreset": "macos-opencl",
+      "targets": [
+        "leelaz",
+        "tests"
+      ]
+    },
+    {
+      "name": "macos-dist",
+      "configurePreset": "macos-dist",
+      "targets": [
+        "leelaz",
+        "tests"
+      ]
+    },
+    {
+      "name": "macos-debug",
+      "configurePreset": "macos-debug",
+      "targets": [
+        "leelaz",
+        "tests"
+      ]
+    },
+    {
+      "name": "macos-asan",
+      "configurePreset": "macos-asan",
+      "targets": [
+        "leelaz",
+        "tests"
+      ]
+    },
+    {
+      "name": "linux-cpu",
+      "configurePreset": "linux-cpu",
+      "targets": [
+        "leelaz",
+        "tests"
+      ]
+    },
+    {
+      "name": "windows-cpu",
+      "configurePreset": "windows-cpu",
+      "targets": [
+        "leelaz",
+        "tests"
+      ],
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "macos-cpu",
+      "configurePreset": "macos-cpu",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-opencl",
+      "configurePreset": "macos-opencl",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-dist",
+      "configurePreset": "macos-dist",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-debug",
+      "configurePreset": "macos-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-asan",
+      "configurePreset": "macos-asan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-cpu",
+      "configurePreset": "linux-cpu",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-cpu",
+      "configurePreset": "windows-cpu",
+      "output": {
+        "outputOnFailure": true
+      },
+      "configuration": "Release"
+    }
   ]
 }

@@ -51,8 +51,8 @@ case "$MODE" in
     tests)
         DIR="$(build_dir_for debug)"
         [[ -x "$DIR/tests" ]] || "$SCRIPTS_DIR/build.sh" debug --no-test
-        cd "$DIR"   # tests read ../src/tests/0k.txt
-        exec lldb -- ./tests --gtest_filter="$FILTER"
+        cd "$REPO_ROOT/src"   # tests read ../src/tests/0k.txt (same as ctest)
+        exec lldb -- "$DIR/tests" --gtest_filter="$FILTER"
         ;;
     smoke)
         W="$(weights_or_random)"
