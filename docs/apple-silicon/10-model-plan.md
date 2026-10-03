@@ -94,7 +94,7 @@ Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done
 | 1.2 | L | | ⬜ | | | |
 | 1.3 | M | | ⬜ | | | |
 | 1.4a | S | Opus 5.5 | ✅ | ctest, G1 vs pre-change 3.7e-7 and vs Eigen 3.4e-7, scalar (MSVC) fallback G1 3.0e-9, ASan+UBSan clean, x86-64 SSE compile | `004f7d6` | 1.26× single-thread, 1.13× at 10 threads (random 15b×192). Now store-bound; a `[tile][channel]` V layout was tried and was 9% slower (see BENCHMARKS.md) |
-| 1.4b | M | | ⬜ | | | |
+| 1.4b | M | Sonnet 5.5 | ✅ | ctest, G1 vs pre-1.4 build 3.7e-7 and vs Eigen 3.4e-7, ASan+UBSan clean | (this commit) | Speed-neutral (±1%); kept for less memory traffic and one fewer duplicate function |
 | 1.5 | L | | ⬜ | | | |
 | 1.R | S | | ⬜ | | | |
 

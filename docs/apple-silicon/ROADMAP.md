@@ -37,8 +37,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 1. `src/Platform.h`: core counts, QoS, and feature detection.
 2. Accelerate as the default BLAS, single-threaded per call, with a startup log line.
 3. Default `-t` and QoS for P/E cores.
-4. 🟡 NEON-friendly Winograd transforms ✅ (1.26× single-thread on a random
-   15b×192). Fused BN+ReLU+residual pass still to do (step 1.4b).
+4. ✅ NEON-friendly Winograd transforms (1.26× single-thread on a random
+   15b×192) and a fused BN+ReLU+residual pass (speed-neutral, simpler).
 5. Gate G1 + benchmark.
 
 **Exit:** ≥1.5× Eigen on 15b×192, and G1 passes. Tag `as.1`.

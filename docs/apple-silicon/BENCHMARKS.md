@@ -62,6 +62,20 @@ Observations:
 - Multi-thread gains are smaller, because 10 threads share memory bandwidth
   and include the E-cores.
 
+## Phase 1 step 1.4b: fused BN + ReLU + residual (2026-10-03)
+
+A/B interleaved against 1.4a, 5 rounds, single thread, random nets.
+
+| Network | 1.4a n/s (median) | 1.4b n/s (median) | Change |
+|---------|------------------:|------------------:|-------:|
+| random 15b×192 | 79 | 79 | 0% |
+| random 6b×64 | 836 | 844 | +1% (noise) |
+
+Speed-neutral. The separate pass was cheap next to the sgemm and the
+transforms. Kept because it removes a full read/write sweep of each layer's
+output and deletes the duplicate `batchnorm` template from `CPUPipe.cpp`.
+Parity unchanged (G1 vs pre-1.4 build: 3.7e-7 on 15b×192).
+
 ## Numerical parity
 
 | Gate | Compared | Network / positions | max abs Δ prior | max abs Δ winrate | Result |
