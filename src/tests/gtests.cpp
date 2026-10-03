@@ -374,9 +374,8 @@ TEST_F(LeelaTest, AnalyzeParseMinmoves) {
     gtp_execute("lz-setoption name pondering value false");
     gtp_execute("lz-setoption name playouts value 1");
     auto result = gtp_execute("lz-analyze b interval 1 minmoves 5");
-    // Expect to see at least 5 move priors. Count simple matches instead of
-    // one nested lazy regex: MSVC's recursive std::regex overflows the stack
-    // on that pattern with long output.
+    // Expect to see at least 5 move priors. Counting flat matches avoids
+    // nested lazy quantifiers, which backtrack heavily on long output.
     expect_regex(result.first, "info");
     const auto prior_re = std::regex("prior\\s+\\d+");
     const auto priors = std::distance(

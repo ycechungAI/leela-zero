@@ -70,6 +70,8 @@ case "$CMD" in
             esac
         done
         mkdir -p "$IN/train" "$IN/test"
+        # Start from scratch so re-runs never leave a chunk linked in both sets.
+        find "$IN/train" "$IN/test" -type l -delete
         CHUNKS=()
         while IFS= read -r f; do CHUNKS+=("$f"); done < <(
             find "$IN" -name '*.gz' -not -path "$IN/train/*" -not -path "$IN/test/*" | sort)

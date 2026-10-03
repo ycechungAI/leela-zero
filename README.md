@@ -146,7 +146,7 @@ Requires Visual Studio 2019 or 2022 (with "Desktop development with C++") and
     cd leela-zero
     git submodule update --init --recursive
 
-    # In a "Developer PowerShell for VS", with VCPKG_INSTALLATION_ROOT pointing at vcpkg
+    # In a "Developer PowerShell for VS" (VS 2022 sets VCPKG_ROOT; otherwise point it at your vcpkg clone)
     cmake --preset windows-cpu
     cmake --build --preset windows-cpu
     ctest --preset windows-cpu

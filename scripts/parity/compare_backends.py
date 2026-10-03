@@ -15,35 +15,19 @@ winrate), 1 otherwise.
 """
 import argparse
 import glob
+import os
 import shlex
-import subprocess
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+from gtp import GTPEngine  # noqa: E402
 
-class Engine:
+
+class Engine(GTPEngine):
     def __init__(self, cmdline, weights):
         cmd = shlex.split(cmdline) + ["--gtp", "-q", "-w", weights, "--noponder",
                                       "-t", "1"]
-        self.name = cmdline
-        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, text=True, bufsize=1)
-
-    def send(self, command):
-        self.p.stdin.write(command + "\n")
-        self.p.stdin.flush()
-        lines = []
-        while True:
-            line = self.p.stdout.readline()
-            if line == "":
-                raise RuntimeError("%s exited during: %s" % (self.name, command))
-            if line.strip() == "" and lines:
-                break
-            if line.strip():
-                lines.append(line.strip())
-        reply = " ".join(lines)
-        if reply.startswith("?"):
-            raise RuntimeError("%s: '%s' failed: %s" % (self.name, command, reply))
-        return reply[1:].strip()
+        super().__init__(cmd, name=cmdline)
 
     def eval(self, symmetry):
         vals = [float(x) for x in self.send("lz-nn-eval %d" % symmetry).split()]
@@ -51,12 +35,6 @@ class Engine:
             raise RuntimeError("unexpected lz-nn-eval output length %d" % len(vals))
         return vals[0], vals[1:]   # winrate, [pass] + 361 priors
 
-    def close(self):
-        try:
-            self.send("quit")
-        except Exception:
-            pass
-        self.p.wait(timeout=10)
 
 
 def main():
@@ -68,7 +46,7 @@ def main():
                     help="weights for the test engine (default: same as -w), e.g. a re-exported net")
     ap.add_argument("--sgf", nargs="*", default=[], help="SGF files (globs ok)")
     ap.add_argument("--moves", default="0,10,40,100",
-                    help="comma-separated move numbers to load from each SGF")
+                    help="comma-separated move counts: compare the position after N moves (0 = empty board)")
     ap.add_argument("--symmetries", default="0,1,2,3,4,5,6,7")
     ap.add_argument("--tol", type=float, default=1e-4, help="max abs diff, priors")
     ap.add_argument("--tol-value", type=float, default=None,
@@ -89,7 +67,9 @@ def main():
     try:
         for sgf, move in positions:
             for e in (ref, test):
-                e.send("clear_board" if sgf is None else "loadsgf %s %d" % (sgf, move))
+                # "loadsgf f N" stops before move N, so N = moves + 1 gives the
+                # position after `move` moves (N = 0 would load the whole game).
+                e.send("clear_board" if sgf is None else "loadsgf %s %d" % (sgf, move + 1))
             for s in syms:
                 v_r, p_r = ref.eval(s)
                 v_t, p_t = test.eval(s)

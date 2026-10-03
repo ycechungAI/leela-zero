@@ -75,6 +75,7 @@ target_include_directories(leelaz_core SYSTEM PUBLIC "${PROJECT_SOURCE_DIR}/src/
 target_link_libraries(leelaz_core PUBLIC Boost::program_options ZLIB::ZLIB Threads::Threads)
 
 target_compile_definitions(leelaz_core PUBLIC
+  LZ_VERSION="${PROJECT_VERSION}"
   $<$<BOOL:${USE_CPU_ONLY}>:USE_CPU_ONLY>
   $<$<BOOL:${USE_HALF}>:USE_HALF>
   $<$<BOOL:${USE_BLAS}>:USE_BLAS>
@@ -106,13 +107,20 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   if(HAVE_WNO_NAN_INFINITY_DISABLED)
     target_compile_options(leelaz_core PUBLIC -Wno-nan-infinity-disabled)
   endif()
-  if(LZ_NATIVE_ARCH)
-    if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+  # Target architecture: CMAKE_OSX_ARCHITECTURES wins on Apple (cross/universal builds).
+  set(_lz_target_arch "${CMAKE_SYSTEM_PROCESSOR}")
+  if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+    set(_lz_target_arch "${CMAKE_OSX_ARCHITECTURES}")
+  endif()
+  if(_lz_target_arch MATCHES ";")
+    message(STATUS "Multi-architecture build (${_lz_target_arch}): no CPU-specific tuning")
+  elseif(LZ_NATIVE_ARCH AND _lz_target_arch STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR)
+    if(APPLE AND _lz_target_arch MATCHES "arm64|aarch64")
       target_compile_options(leelaz_core PUBLIC -mcpu=native)
     else()
       target_compile_options(leelaz_core PUBLIC -march=native)
     endif()
-  elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+  elseif(APPLE AND _lz_target_arch MATCHES "arm64|aarch64")
     target_compile_options(leelaz_core PUBLIC -mcpu=apple-m1)   # runs on every Apple Silicon Mac
   endif()
   if(LZ_SANITIZE)
@@ -121,7 +129,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   endif()
 elseif(MSVC)
   target_compile_options(leelaz_core PUBLIC /W3 /fp:fast /bigobj)
-  target_compile_definitions(leelaz_core PUBLIC NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(leelaz_core PUBLIC _CRT_SECURE_NO_WARNINGS)   # NOMINMAX: see config.h
 endif()
 
 # Link-time optimization in Release only (on macOS LTO drops Debug info).

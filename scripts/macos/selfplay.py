@@ -9,39 +9,11 @@ substitute for autogtp; it does not talk to any server.
 """
 import argparse
 import os
-import subprocess
 import sys
 import time
 
-
-class GTP:
-    def __init__(self, cmd):
-        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, text=True, bufsize=1)
-
-    def send(self, command):
-        self.p.stdin.write(command + "\n")
-        self.p.stdin.flush()
-        lines = []
-        while True:
-            line = self.p.stdout.readline()
-            if line == "":
-                raise RuntimeError("leelaz exited while running: " + command)
-            if line.strip() == "" and lines:
-                break
-            if line.strip():
-                lines.append(line.strip())
-        reply = "\n".join(lines)
-        if reply.startswith("?"):
-            raise RuntimeError("GTP error for '%s': %s" % (command, reply))
-        return reply[1:].strip()
-
-    def close(self):
-        try:
-            self.send("quit")
-        except Exception:
-            pass
-        self.p.wait(timeout=10)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+from gtp import GTPEngine  # noqa: E402
 
 
 def play_game(gtp, max_moves):
@@ -87,7 +59,7 @@ def main():
     if args.threads:
         cmd += ["-t", str(args.threads)]
 
-    gtp = GTP(cmd)
+    gtp = GTPEngine(cmd, name="leelaz")
     written = 0
     try:
         for i in range(args.games):
