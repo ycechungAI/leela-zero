@@ -46,10 +46,10 @@ public:
     virtual Result execute() = 0;
     virtual void init(const Order& o);
     void finish() {
-        m_state.store(FINISHING);
+        m_state.storeRelaxed(FINISHING);
     }
     void store() {
-        m_state.store(STORING);
+        m_state.storeRelaxed(STORING);
     }
 
 protected:

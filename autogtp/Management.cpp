@@ -65,9 +65,9 @@ Management::Management(const int gpus, const int games,
       m_lockFile(nullptr) {}
 
 void Management::runTuningProcess(const QString& tuneCmdLine) {
-    QTextStream(stdout) << tuneCmdLine << endl;
+    QTextStream(stdout) << tuneCmdLine << Qt::endl;
     QProcess tuneProcess;
-    tuneProcess.start(tuneCmdLine);
+    tuneProcess.startCommand(tuneCmdLine);
     tuneProcess.waitForStarted(-1);
     while (tuneProcess.state() == QProcess::Running) {
         tuneProcess.waitForReadyRead(1000);
@@ -81,12 +81,12 @@ void Management::runTuningProcess(const QString& tuneCmdLine) {
         QTextStream(stdout) << text;
         QTextStream(stdout) << tuneProcess.readAllStandardError();
     }
-    QTextStream(stdout) << "Found Leela Version : " << m_leelaversion << endl;
+    QTextStream(stdout) << "Found Leela Version : " << m_leelaversion << Qt::endl;
     tuneProcess.waitForFinished(-1);
 }
 
 Order Management::getWork(const QFileInfo& file) {
-    QTextStream(stdout) << "Got previously stored file" << endl;
+    QTextStream(stdout) << "Got previously stored file" << Qt::endl;
     Order o;
     o.load(file.fileName());
     QFile::remove(file.fileName());
@@ -100,7 +100,7 @@ void Management::giveAssignments() {
     sendAllGames();
 
     // Make the OpenCl tuning before starting the threads
-    QTextStream(stdout) << "Starting tuning process, please wait..." << endl;
+    QTextStream(stdout) << "Starting tuning process, please wait..." << Qt::endl;
 
     Order tuneOrder = getWork(true);
     QString tuneCmdLine("./leelaz --batchsize=5 --tune-only -w networks/");
@@ -112,7 +112,7 @@ void Management::giveAssignments() {
             runTuningProcess(tuneCmdLine + " --gpu=" + m_gpusList.at(i));
         }
     }
-    QTextStream(stdout) << "Tuning process finished" << endl;
+    QTextStream(stdout) << "Tuning process finished" << Qt::endl;
 
     m_start = std::chrono::high_resolution_clock::now();
     QString myGpu;
@@ -125,7 +125,7 @@ void Management::giveAssignments() {
                 myGpu = m_gpusList.at(gpu);
             }
             QTextStream(stdout) << "Starting thread " << game + 1;
-            QTextStream(stdout) << " on device " << gpu << endl;
+            QTextStream(stdout) << " on device " << gpu << Qt::endl;
             m_gamesThreads[thread_index] =
                 new Worker(thread_index, myGpu, this);
             connect(m_gamesThreads[thread_index], &Worker::resultReady, this,
@@ -149,11 +149,11 @@ void Management::storeGames() {
 }
 
 void Management::wait() {
-    QTextStream(stdout) << "Management: waiting for workers" << endl;
+    QTextStream(stdout) << "Management: waiting for workers" << Qt::endl;
     for (int i = 0; i < m_gpus * m_games; ++i) {
         m_gamesThreads[i]->wait();
         QTextStream(stdout)
-            << "Management: Worker " << i + 1 << " ended" << endl;
+            << "Management: Worker " << i + 1 << " ended" << Qt::endl;
     }
 }
 
@@ -225,10 +225,10 @@ void Management::printTimingInfo(float duration) {
                         << " matches) played in " << total_time_min.count()
                         << " minutes = " << total_time_s.count() / m_gamesPlayed
                         << " seconds/game, "
-                        << total_time_millis.count() / m_movesMade.load()
+                        << total_time_millis.count() / m_movesMade.loadRelaxed()
                         << " ms/move"
                         << ", last game took " << int(duration) << " seconds."
-                        << endl;
+                        << Qt::endl;
 }
 
 QString Management::getOption(const QJsonObject& ob, const QString& key,
@@ -363,7 +363,7 @@ Order Management::getWorkInternal(bool tuning) {
         }
     }
     QProcess curl;
-    curl.start(prog_cmdline);
+    curl.startCommand(prog_cmdline);
     curl.waitForFinished(-1);
 
     if (curl.exitCode()) {
@@ -380,7 +380,7 @@ Order Management::getWorkInternal(bool tuning) {
     }
 
     if (!tuning) {
-        QTextStream(stdout) << doc.toJson() << endl;
+        QTextStream(stdout) << doc.toJson() << Qt::endl;
     }
     QMap<QString, QString> parameters;
     QJsonObject ob = doc.object();
@@ -395,13 +395,13 @@ Order Management::getWorkInternal(bool tuning) {
     }
     if (required_version > m_version) {
         QTextStream(stdout)
-            << "Required client version: " << required_version << endl;
-        QTextStream(stdout) << ' ' << endl;
+            << "Required client version: " << required_version << Qt::endl;
+        QTextStream(stdout) << ' ' << Qt::endl;
         QTextStream(stdout)
             << "Server requires client version " << required_version
-            << " but we are version " << m_version << endl;
+            << " but we are version " << m_version << Qt::endl;
         QTextStream(stdout)
-            << "Check https://github.com/gcp/leela-zero for updates." << endl;
+            << "Check https://github.com/gcp/leela-zero for updates." << Qt::endl;
         exit(EXIT_FAILURE);
     }
     // passing leela version
@@ -445,7 +445,7 @@ Order Management::getWorkInternal(bool tuning) {
 
     if (!tuning) {
         QTextStream(stdout)
-            << "Got new job: " << ob.value("cmd").toString() << endl;
+            << "Got new job: " << ob.value("cmd").toString() << Qt::endl;
     }
     if (ob.value("cmd").toString() == "selfplay") {
         QString net = ob.value("hash").toString();
@@ -459,12 +459,12 @@ Order Management::getWorkInternal(bool tuning) {
             QTextStream(stdout)
                 << "Deleting network "
                 << "networks/" + m_fallBack.parameters()["network"] + ".gz"
-                << endl;
+                << Qt::endl;
             QFile::remove("networks/" + m_fallBack.parameters()["network"]
                           + ".gz");
         }
         m_fallBack = o;
-        QTextStream(stdout) << "net: " << net << "." << endl;
+        QTextStream(stdout) << "net: " << net << "." << Qt::endl;
     }
     if (ob.value("cmd").toString() == "match") {
         QString net1 = ob.value("black_hash").toString();
@@ -495,7 +495,7 @@ Order Management::getWorkInternal(bool tuning) {
                     << "Deleting network "
                     << "networks/" + m_lastMatch.parameters()["firstNet"]
                            + ".gz"
-                    << endl;
+                    << Qt::endl;
                 QFile::remove("networks/" + m_lastMatch.parameters()["firstNet"]
                               + ".gz");
             }
@@ -505,14 +505,14 @@ Order Management::getWorkInternal(bool tuning) {
                     << "Deleting network "
                     << "networks/" + m_lastMatch.parameters()["secondNet"]
                            + ".gz"
-                    << endl;
+                    << Qt::endl;
                 QFile::remove("networks/"
                               + m_lastMatch.parameters()["secondNet"] + ".gz");
             }
         }
         m_lastMatch = o;
-        QTextStream(stdout) << "first network: " << net1 << "." << endl;
-        QTextStream(stdout) << "second network " << net2 << "." << endl;
+        QTextStream(stdout) << "first network: " << net1 << "." << Qt::endl;
+        QTextStream(stdout) << "second network " << net2 << "." << Qt::endl;
     }
     if (ob.value("cmd").toString() == "wait") {
         parameters["minutes"] = ob.value("minutes").toString();
@@ -520,7 +520,7 @@ Order Management::getWorkInternal(bool tuning) {
         o.type(Order::Wait);
         o.parameters(parameters);
         QTextStream(stdout)
-            << "minutes: " << parameters["minutes"] << "." << endl;
+            << "minutes: " << parameters["minutes"] << "." << Qt::endl;
     }
     return o;
 }
@@ -531,19 +531,19 @@ Order Management::getWork(bool tuning) {
             return getWorkInternal(tuning);
         } catch (const NetworkException& ex) {
             QTextStream(stdout)
-                << "Network connection to server failed." << endl;
-            QTextStream(stdout) << ex.what() << endl;
+                << "Network connection to server failed." << Qt::endl;
+            QTextStream(stdout) << ex.what() << Qt::endl;
             auto retry_delay =
                 std::min<int>(RETRY_DELAY_MIN_SEC * std::pow(1.5, retries),
                               RETRY_DELAY_MAX_SEC);
             QTextStream(stdout)
-                << "Retrying in " << retry_delay << " s." << endl;
+                << "Retrying in " << retry_delay << " s." << Qt::endl;
             QThread::sleep(retry_delay);
         }
     }
     QTextStream(stdout) << "Maximum number of retries exceeded. Falling back "
                            "to previous network."
-                        << endl;
+                        << Qt::endl;
     if (m_fallBack.type() != Order::Error) {
         QMap<QString, QString> map = m_fallBack.parameters();
         QString seed = QString::number(
@@ -575,10 +575,10 @@ bool Management::networkExists(const QString& name, const QString& gzipHash) {
             }
             QTextStream(stdout)
                 << "Downloaded network hash doesn't match, calculated: "
-                << result << " it should be: " << gzipHash << endl;
+                << result << " it should be: " << gzipHash << Qt::endl;
         } else {
             QTextStream(stdout)
-                << "Unable to open network file for reading." << endl;
+                << "Unable to open network file for reading." << Qt::endl;
             if (f.remove()) {
                 return false;
             }
@@ -612,7 +612,7 @@ void Management::fetchNetwork(const QString& net, const QString& hash) {
     prog_cmdline.append(" " + server_url + name);
 
     QProcess curl;
-    curl.start(prog_cmdline);
+    curl.startCommand(prog_cmdline);
     curl.waitForFinished(-1);
 
     if (curl.exitCode()) {
@@ -624,7 +624,7 @@ void Management::fetchNetwork(const QString& net, const QString& hash) {
     QString outstr(output);
     QStringList outlst = outstr.split("\n");
     QString outfile = outlst[0];
-    QTextStream(stdout) << "Net filename: " << outfile << endl;
+    QTextStream(stdout) << "Net filename: " << outfile << Qt::endl;
     return;
 }
 
@@ -644,7 +644,7 @@ QString Management::fetchGameData(const QString& name,
     prog_cmdline.append(" " + server_url + "view/" + name + "." + extension);
 
     QProcess curl;
-    curl.start(prog_cmdline);
+    curl.startCommand(prog_cmdline);
     curl.waitForFinished(-1);
 
     if (curl.exitCode()) {
@@ -688,7 +688,10 @@ void Management::gzipFile(const QString& fileName) {
     gzipCmd.append(".exe");
 #endif
     gzipCmd.append(" " + fileName);
-    QProcess::execute(gzipCmd);
+    // Qt 6 no longer splits a single command string; do it explicitly.
+    auto gzipArgs = QProcess::splitCommand(gzipCmd);
+    const auto gzipProg = gzipArgs.takeFirst();
+    QProcess::execute(gzipProg, gzipArgs);
 }
 
 void Management::saveCurlCmdLine(const QStringList& prog_cmdline,
@@ -702,11 +705,11 @@ void Management::saveCurlCmdLine(const QStringList& prog_cmdline,
         return;
     }
     QTextStream out(&f);
-    out << name << endl;
-    out << prog_cmdline.size() << endl;
+    out << name << Qt::endl;
+    out << prog_cmdline.size() << Qt::endl;
     QStringList::ConstIterator it = prog_cmdline.constBegin();
     while (it != prog_cmdline.constEnd()) {
-        out << *it << " " << endl;
+        out << *it << " " << Qt::endl;
         ++it;
     }
     f.close();
@@ -748,7 +751,7 @@ void Management::sendAllGames() {
             sent = sendCurl(lines);
             if (sent) {
                 QTextStream(stdout)
-                    << "File: " << file.fileName() << " sent" << endl;
+                    << "File: " << file.fileName() << " sent" << Qt::endl;
                 file.remove();
                 cleanupFiles(name);
                 if (i + 1 < list.size()) {
@@ -757,10 +760,10 @@ void Management::sendAllGames() {
             }
         } catch (const NetworkException& ex) {
             QTextStream(stdout)
-                << "Network connection to server failed." << endl;
-            QTextStream(stdout) << ex.what() << endl;
+                << "Network connection to server failed." << Qt::endl;
+            QTextStream(stdout) << ex.what() << Qt::endl;
             QTextStream(stdout)
-                << "Retrying when next game is finished." << endl;
+                << "Retrying when next game is finished." << Qt::endl;
         }
     }
 }
@@ -776,11 +779,11 @@ bool Management::sendCurl(const QStringList& lines) {
         ++it;
     }
     QProcess curl;
-    curl.start(prog_cmdline);
+    curl.startCommand(prog_cmdline);
     curl.waitForFinished(-1);
     if (curl.exitCode()) {
         QTextStream(stdout)
-            << "Upload failed. Curl Exit code: " << curl.exitCode() << endl;
+            << "Upload failed. Curl Exit code: " << curl.exitCode() << Qt::endl;
         QTextStream(stdout) << curl.readAllStandardOutput();
         throw NetworkException("Curl returned non-zero exit code "
                                + std::to_string(curl.exitCode()));
@@ -807,7 +810,7 @@ void Management::uploadResult(const QMap<QString, QString>& r,
                               const QMap<QString, QString>& l) {
     QTextStream(stdout) << "Uploading match: " << r["file"]
                         << ".sgf for networks ";
-    QTextStream(stdout) << l["firstNet"] << " and " << l["secondNet"] << endl;
+    QTextStream(stdout) << l["firstNet"] << " and " << l["secondNet"] << Qt::endl;
     archiveFiles(r["file"]);
     gzipFile(r["file"] + ".sgf");
     QStringList prog_cmdline;
@@ -834,13 +837,13 @@ void Management::uploadResult(const QMap<QString, QString>& r,
             break;
         } catch (const NetworkException& ex) {
             QTextStream(stdout)
-                << "Network connection to server failed." << endl;
-            QTextStream(stdout) << ex.what() << endl;
+                << "Network connection to server failed." << Qt::endl;
+            QTextStream(stdout) << ex.what() << Qt::endl;
             auto retry_delay =
                 std::min<int>(RETRY_DELAY_MIN_SEC * std::pow(1.5, retries),
                               RETRY_DELAY_MAX_SEC);
             QTextStream(stdout)
-                << "Retrying in " << retry_delay << " s." << endl;
+                << "Retrying in " << retry_delay << " s." << Qt::endl;
             QThread::sleep(retry_delay);
         }
     }
@@ -864,7 +867,7 @@ https://zero.sjeng.org/submit
 void Management::uploadData(const QMap<QString, QString>& r,
                             const QMap<QString, QString>& l) {
     QTextStream(stdout) << "Uploading game: " << r["file"]
-                        << ".sgf for network " << l["network"] << endl;
+                        << ".sgf for network " << l["network"] << Qt::endl;
     archiveFiles(r["file"]);
     gzipFile(r["file"] + ".sgf");
     QStringList prog_cmdline;
@@ -885,13 +888,13 @@ void Management::uploadData(const QMap<QString, QString>& r,
             break;
         } catch (const NetworkException& ex) {
             QTextStream(stdout)
-                << "Network connection to server failed." << endl;
-            QTextStream(stdout) << ex.what() << endl;
+                << "Network connection to server failed." << Qt::endl;
+            QTextStream(stdout) << ex.what() << Qt::endl;
             auto retry_delay =
                 std::min<int>(RETRY_DELAY_MIN_SEC * std::pow(1.5, retries),
                               RETRY_DELAY_MAX_SEC);
             QTextStream(stdout)
-                << "Retrying in " << retry_delay << " s." << endl;
+                << "Retrying in " << retry_delay << " s." << Qt::endl;
             QThread::sleep(retry_delay);
         }
     }

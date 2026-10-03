@@ -15,15 +15,17 @@ jobs:
     name: macOS arm64 / CPU (Accelerate) + parity
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: Install dependencies
-        run: brew install boost
+        run: brew install boost qtbase
       - name: Build (Accelerate)
         run: |
           cmake --preset macos-cpu
           cmake --build --preset macos-cpu -j"$(sysctl -n hw.ncpu)"
+      - name: Build autogtp and validation (Qt 6)
+        run: cmake --build build --target autogtp validation -j"$(sysctl -n hw.ncpu)"
       - name: Unit tests
         run: ctest --preset macos-cpu
       - name: GTP smoke test (random network)
@@ -45,7 +47,7 @@ jobs:
     name: macOS arm64 / ASan + UBSan
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: Install dependencies
@@ -64,7 +66,7 @@ jobs:
     name: macOS arm64 / OpenCL (compile only)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: Install dependencies
@@ -78,18 +80,19 @@ jobs:
     name: Linux x86_64 / CPU (OpenBLAS)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake libboost-program-options-dev \
-              libopenblas-dev zlib1g-dev
+              libopenblas-dev zlib1g-dev qt6-base-dev
       - name: Build
         run: |
           cmake --preset linux-cpu
           cmake --build --preset linux-cpu -j"$(nproc)"
+          cmake --build build --target autogtp validation -j"$(nproc)"
       - name: Unit tests
         run: ctest --preset linux-cpu
 
@@ -97,7 +100,7 @@ jobs:
     name: Windows x64 / CPU (Eigen, vcpkg)
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: Build

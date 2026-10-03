@@ -282,7 +282,31 @@ Notes:
 - The old TF1 trainer in `training/tf` doesn't run on macOS arm64. The data
   format is shared, so chunks made here also work with it on Linux/CUDA.
 
-## 7. File locations
+## 7. autogtp and validation (Qt 6)
+
+These are optional Qt tools: `validation` runs engine-vs-engine matches with
+a statistical stopping rule (SPRT), and `autogtp` contributes self-play to a
+training server.
+
+```bash
+brew install qtbase                      # Qt 6 core module only (no GUI)
+cmake --preset macos-cpu                 # re-run so CMake finds Qt 6
+cmake --build build --target autogtp validation
+```
+
+Local match between two networks (no server involved). Give `-o` once per
+network, or the second engine falls back to the 3200-visit default:
+
+```bash
+O="-g -v 400 --noponder -t 1 -q -d -r 0 -w"
+build/validation/validation -n netA.gz -o "$O" -n netB.gz -o "$O" -g 2 -k sgf-out \
+    -- build/leelaz -- build/leelaz
+```
+
+It prints a running `W wins, L losses` tally and stops when the test
+decides (default hypothesis 0 vs 35 Elo).
+
+## 8. File locations
 
 | What | Where |
 |------|-------|

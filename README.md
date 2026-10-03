@@ -97,7 +97,8 @@ ocl-icd-opencl-dev on Debian/Ubuntu) plus an OpenCL driver for your GPU
 (OpenCL 1.1 is enough). Without a GPU, configure with `-DUSE_CPU_ONLY=ON`.
 * Optional: BLAS for faster CPU inference (`-DUSE_BLAS=ON`). Accelerate is
 used on macOS (on by default there), OpenBLAS (libopenblas-dev) elsewhere.
-* Optional: Qt 6 (Core) to build `autogtp` and `validation`.
+* Optional: Qt 6 (Core) to build `autogtp` and `validation` (`brew install qtbase`,
+`apt install qt6-base-dev`).
 
 Useful options: `USE_CPU_ONLY`, `USE_BLAS`, `USE_HALF`, `LZ_NATIVE_ARCH`
 (default ON; turn OFF for redistributable binaries), `LZ_SANITIZE`

@@ -21,7 +21,10 @@ Done. The as-built design differs from the plan below in these ways:
   (`vcpkg.json`). CI is `.github/workflows/ci.yml` (macOS, Linux, Windows).
 - `ctest` runs the unit tests from any build directory.
 - `USE_METAL` / `USE_COREML` options arrive with their phases.
-- The Qt 6 port of autogtp/validation is pending. CMake only looks for Qt 6.
+- autogtp/validation ported to Qt 6 (Qt 5 is EOL): `Qt::endl`, relaxed
+  atomics, and `QProcess::startCommand`/`splitCommand` in place of the removed
+  single-string `start()`/`execute()`. Without that change, engines and curl
+  silently failed to launch. CMake only looks for Qt 6.
 
 ## 2. Changes (original plan)
 
