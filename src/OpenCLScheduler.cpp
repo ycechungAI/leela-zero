@@ -222,11 +222,19 @@ void OpenCLScheduler<net_t>::push_weights(
     const unsigned int outputs,
     std::shared_ptr<const ForwardPipeWeights> weights) {
 
-    auto weight_index = size_t{0};
+    // The weights are raw 3x3 kernels; the OpenCL kernels want Winograd
+    // tiles, so filter_size is the Winograd alpha (4x4 filter -> 6x6 tiles).
+    const auto transform = [&weights, outputs](const size_t index) {
+        const auto inputs =
+            index == 0 ? static_cast<int>(Network::INPUT_CHANNELS)
+                       : static_cast<int>(outputs);
+        return Network::winograd_transform_f(weights->m_conv_weights[index],
+                                             static_cast<int>(outputs), inputs);
+    };
 
-    // Winograd filter transformation changes filter size to 4x4
+    auto weight_index = size_t{0};
     push_input_convolution(filter_size, channels, outputs,
-                           weights->m_conv_weights[weight_index],
+                           transform(weight_index),
                            weights->m_batchnorm_means[weight_index],
                            weights->m_batchnorm_stddevs[weight_index]);
     weight_index++;
@@ -235,10 +243,10 @@ void OpenCLScheduler<net_t>::push_weights(
     // the second ~ last entry is all on residual topwer
     for (auto i = size_t{0}; i < weights->m_conv_weights.size() / 2; i++) {
         push_residual(filter_size, outputs, outputs,
-                      weights->m_conv_weights[weight_index],
+                      transform(weight_index),
                       weights->m_batchnorm_means[weight_index],
                       weights->m_batchnorm_stddevs[weight_index],
-                      weights->m_conv_weights[weight_index + 1],
+                      transform(weight_index + 1),
                       weights->m_batchnorm_means[weight_index + 1],
                       weights->m_batchnorm_stddevs[weight_index + 1]);
         weight_index += 2;

@@ -422,25 +422,25 @@ void CPUPipe::forward(const std::vector<float>& input,
 
     // Each convolution applies its batch norm, ReLU and (for the second
     // convolution of a block) the residual add as it writes its output.
-    winograd_convolve3(output_channels, input, m_weights->m_conv_weights[0], V,
+    winograd_convolve3(output_channels, input, m_conv_u[0], V,
                        M, conv_out, m_weights->m_batchnorm_means[0].data(),
                        m_weights->m_batchnorm_stddevs[0].data());
 
     // Residual tower
     auto conv_in = std::vector<float>(output_channels * NUM_INTERSECTIONS);
     auto res = std::vector<float>(output_channels * NUM_INTERSECTIONS);
-    for (auto i = size_t{1}; i < m_weights->m_conv_weights.size(); i += 2) {
+    for (auto i = size_t{1}; i < m_conv_u.size(); i += 2) {
         auto output_channels = m_input_channels;
         std::swap(conv_out, conv_in);
         winograd_convolve3(output_channels, conv_in,
-                           m_weights->m_conv_weights[i], V, M, conv_out,
+                           m_conv_u[i], V, M, conv_out,
                            m_weights->m_batchnorm_means[i].data(),
                            m_weights->m_batchnorm_stddevs[i].data());
 
         std::swap(conv_in, res);
         std::swap(conv_out, conv_in);
         winograd_convolve3(output_channels, conv_in,
-                           m_weights->m_conv_weights[i + 1], V, M, conv_out,
+                           m_conv_u[i + 1], V, M, conv_out,
                            m_weights->m_batchnorm_means[i + 1].data(),
                            m_weights->m_batchnorm_stddevs[i + 1].data(),
                            res.data());
@@ -457,6 +457,16 @@ void CPUPipe::push_weights(const unsigned int /*filter_size*/,
                            std::shared_ptr<const ForwardPipeWeights> weights) {
 
     m_weights = weights;
+
+    // Winograd-transform the raw 3x3 tower weights once, here.
+    m_conv_u.clear();
+    for (auto i = size_t{0}; i < weights->m_conv_weights.size(); i++) {
+        const auto inputs =
+            i == 0 ? static_cast<int>(Network::INPUT_CHANNELS)
+                   : static_cast<int>(outputs);
+        m_conv_u.push_back(Network::winograd_transform_f(
+            weights->m_conv_weights[i], static_cast<int>(outputs), inputs));
+    }
 
     // Output head convolutions
     m_conv_pol_w = weights->m_conv_pol_w;

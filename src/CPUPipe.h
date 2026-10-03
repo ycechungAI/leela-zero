@@ -75,6 +75,8 @@ private:
 
     // Input + residual block tower
     std::shared_ptr<const ForwardPipeWeights> m_weights;
+    // Tower convolution weights as Winograd tiles (see push_weights).
+    std::vector<std::vector<float>> m_conv_u;
 
     std::vector<float> m_conv_pol_w;
     std::vector<float> m_conv_val_w;

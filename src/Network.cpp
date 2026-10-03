@@ -547,20 +547,6 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
         exit(EXIT_FAILURE);
     }
 
-    auto weight_index = size_t{0};
-    // Input convolution
-    // Winograd transform convolution weights
-    m_fwd_weights->m_conv_weights[weight_index] = winograd_transform_f(
-        m_fwd_weights->m_conv_weights[weight_index], channels, INPUT_CHANNELS);
-    weight_index++;
-
-    // Residual block convolutions
-    for (auto i = size_t{0}; i < residual_blocks * 2; i++) {
-        m_fwd_weights->m_conv_weights[weight_index] = winograd_transform_f(
-            m_fwd_weights->m_conv_weights[weight_index], channels, channels);
-        weight_index++;
-    }
-
     // Biases are not calculated and are typically zero but some networks might
     // still have non-zero biases.
     // Move biases to batchnorm means to make the output match without having

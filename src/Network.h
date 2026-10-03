@@ -116,28 +116,18 @@ public:
     // Flag the network to be open for business.
     virtual void resume_evals();
 
+    // F(4x4, 3x3) Winograd filter transformation of raw OIHW 3x3 weights.
+    // Backends that want Winograd tiles apply it in push_weights.
+    static std::vector<float> winograd_transform_f(const std::vector<float>& f,
+                                                   int outputs, int channels);
+
 private:
     std::pair<int, int> load_v1_network(std::istream& wtfile);
     std::pair<int, int> load_network_file(const std::string& filename);
 
-    static std::vector<float> winograd_transform_f(const std::vector<float>& f,
-                                                   int outputs, int channels);
     static std::vector<float> zeropad_U(const std::vector<float>& U,
                                         int outputs, int channels,
                                         int outputs_pad, int channels_pad);
-    static void winograd_transform_in(const std::vector<float>& in,
-                                      std::vector<float>& V, int C);
-    static void winograd_transform_out(const std::vector<float>& M,
-                                       std::vector<float>& Y, int K);
-    static void winograd_convolve3(int outputs,
-                                   const std::vector<float>& input,
-                                   const std::vector<float>& U,
-                                   std::vector<float>& V,
-                                   std::vector<float>& M,
-                                   std::vector<float>& output);
-    static void winograd_sgemm(const std::vector<float>& U,
-                               const std::vector<float>& V,
-                               std::vector<float>& M, int C, int K);
     Netresult get_output_internal(const GameState* state, int symmetry,
                                   bool selfcheck = false);
     static void fill_input_plane_pair(const FullBoard& board,
