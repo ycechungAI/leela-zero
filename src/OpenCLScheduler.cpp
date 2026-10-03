@@ -133,11 +133,7 @@ void OpenCLScheduler<net_t>::initialize(const int channels) {
 
 template <typename net_t>
 OpenCLScheduler<net_t>::~OpenCLScheduler() {
-    {
-        std::unique_lock<std::mutex> lk(m_mutex);
-        m_running = false;
-    }
-    m_cv.notify_all();
+    m_queue.shutdown();
     for (auto& x : m_worker_threads) {
         x.join();
     }
@@ -226,11 +222,19 @@ void OpenCLScheduler<net_t>::push_weights(
     const unsigned int outputs,
     std::shared_ptr<const ForwardPipeWeights> weights) {
 
-    auto weight_index = size_t{0};
+    // The weights are raw 3x3 kernels; the OpenCL kernels want Winograd
+    // tiles, so filter_size is the Winograd alpha (4x4 filter -> 6x6 tiles).
+    const auto transform = [&weights, outputs](const size_t index) {
+        const auto inputs =
+            index == 0 ? static_cast<int>(Network::INPUT_CHANNELS)
+                       : static_cast<int>(outputs);
+        return Network::winograd_transform_f(weights->m_conv_weights[index],
+                                             static_cast<int>(outputs), inputs);
+    };
 
-    // Winograd filter transformation changes filter size to 4x4
+    auto weight_index = size_t{0};
     push_input_convolution(filter_size, channels, outputs,
-                           weights->m_conv_weights[weight_index],
+                           transform(weight_index),
                            weights->m_batchnorm_means[weight_index],
                            weights->m_batchnorm_stddevs[weight_index]);
     weight_index++;
@@ -239,10 +243,10 @@ void OpenCLScheduler<net_t>::push_weights(
     // the second ~ last entry is all on residual topwer
     for (auto i = size_t{0}; i < weights->m_conv_weights.size() / 2; i++) {
         push_residual(filter_size, outputs, outputs,
-                      weights->m_conv_weights[weight_index],
+                      transform(weight_index),
                       weights->m_batchnorm_means[weight_index],
                       weights->m_batchnorm_stddevs[weight_index],
-                      weights->m_conv_weights[weight_index + 1],
+                      transform(weight_index + 1),
                       weights->m_batchnorm_means[weight_index + 1],
                       weights->m_batchnorm_stddevs[weight_index + 1]);
         weight_index += 2;
@@ -257,28 +261,10 @@ template <typename net_t>
 void OpenCLScheduler<net_t>::forward(const std::vector<float>& input,
                                      std::vector<float>& output_pol,
                                      std::vector<float>& output_val) {
-    auto entry =
-        std::make_shared<ForwardQueueEntry>(input, output_pol, output_val);
-    std::unique_lock<std::mutex> lk(entry->mutex);
-    {
-        std::unique_lock<std::mutex> lk(m_mutex);
-        m_forward_queue.push_back(entry);
-
-        if (m_single_eval_in_progress.load()) {
-            m_waittime += 2;
-        }
-    }
-    m_cv.notify_one();
-    entry->cv.wait(lk);
-
-    if (m_draining) {
+    if (!m_queue.submit(input, output_pol, output_val)) {
         throw NetworkHaltException();
     }
 }
-
-#ifndef NDEBUG
-struct batch_stats_t batch_stats;
-#endif
 
 template <typename net_t>
 void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
@@ -290,87 +276,16 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
 
     OpenCLContext context;
 
-    // batch scheduling heuristic.
-    // Returns the batch picked up from the queue (m_forward_queue)
-    // 1) Wait for m_waittime milliseconds for full batch
-    // 2) if we don't have a full batch then just do a single eval
-    //
-    // The purpose of m_waittime is to prevent the system from deadlocking
-    // because we were waiting for a job too long, while the job is never
-    // going to come due to a control dependency (e.g., evals stuck on a
-    // critical path).  To do so:
-    //
-    // 1) if we couldn't form a batch after waiting m_waittime ms, it means
-    // that we hit the critical path and should do scalar evals.
-    // Wait 1ms shorter next time.
-    //
-    // 2) if we picked up a single eval, but were getting additional evals
-    // while that single eval was being processed, it means that we made
-    // the wrong decision.  Wait 2ms longer next time.
-
-    auto pickup_task = [this]() {
-        std::list<std::shared_ptr<ForwardQueueEntry>> inputs;
-        size_t count = 0;
-
-        std::unique_lock<std::mutex> lk(m_mutex);
-        while (true) {
-            if (!m_running) {
-                return inputs;
-            }
-            count = m_forward_queue.size();
-            if (count >= cfg_batch_size) {
-                count = cfg_batch_size;
-                break;
-            }
-
-            bool timeout = !m_cv.wait_for(
-                lk, std::chrono::milliseconds(m_waittime), [this]() {
-                    return !m_running
-                           || m_forward_queue.size() >= cfg_batch_size;
-                });
-
-            if (!m_forward_queue.empty()) {
-                if (timeout
-                    && m_single_eval_in_progress.exchange(true) == false) {
-                    // Waited long enough but couldn't form a batch.
-                    // Check if there is any other single eval in progress,
-                    // and if not, do one from this thread.
-                    if (m_waittime > 1) {
-                        m_waittime--;
-                    }
-                    count = 1;
-                    break;
-                }
-            }
-        }
-        // Move 'count' evals from shared queue to local list.
-        auto end = begin(m_forward_queue);
-        std::advance(end, count);
-        std::move(begin(m_forward_queue), end, std::back_inserter(inputs));
-        m_forward_queue.erase(begin(m_forward_queue), end);
-
-        return inputs;
-    };
-
     auto batch_input = std::vector<float>();
     auto batch_output_pol = std::vector<float>();
     auto batch_output_val = std::vector<float>();
 
     while (true) {
-        auto inputs = pickup_task();
-        auto count = inputs.size();
-
-        if (!m_running) {
-            return;
+        const auto batch = m_queue.pickup(cfg_batch_size);
+        if (batch.empty()) {
+            return; // shutdown
         }
-
-#ifndef NDEBUG
-        if (count == 1) {
-            batch_stats.single_evals++;
-        } else {
-            batch_stats.batch_evals++;
-        }
-#endif
+        const auto count = batch.size();
 
         // prepare input for forward() call
         batch_input.resize(in_size * count);
@@ -378,8 +293,7 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
         batch_output_val.resize(out_val_size * count);
 
         auto index = size_t{0};
-        for (auto& x : inputs) {
-            std::unique_lock<std::mutex> lk(x->mutex);
+        for (const auto& x : batch) {
             std::copy(begin(x->in), end(x->in),
                       begin(batch_input) + in_size * index);
             index++;
@@ -391,53 +305,30 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
 
         // Get output and copy back
         index = 0;
-        for (auto& x : inputs) {
+        for (const auto& x : batch) {
             std::copy(begin(batch_output_pol) + out_pol_size * index,
                       begin(batch_output_pol) + out_pol_size * (index + 1),
                       begin(x->out_p));
             std::copy(begin(batch_output_val) + out_val_size * index,
                       begin(batch_output_val) + out_val_size * (index + 1),
                       begin(x->out_v));
-            x->cv.notify_all();
             index++;
         }
-
-        if (count == 1) {
-            m_single_eval_in_progress = false;
-        }
+        m_queue.complete(batch);
     }
 }
 
 template <typename net_t>
 void OpenCLScheduler<net_t>::drain() {
-    // When signaled to drain requests, this method picks up all pending
-    // requests and wakes them up.  Throws exception once the woken up request
-    // sees m_draining.
-    m_draining = true;
-
-    std::list<std::shared_ptr<ForwardQueueEntry>> fq;
-    {
-        std::unique_lock<std::mutex> lk(m_mutex);
-        std::move(m_forward_queue.begin(), m_forward_queue.end(),
-                  std::back_inserter(fq));
-        m_forward_queue.clear();
-    }
-
-    for (auto& x : fq) {
-        {
-            // dummy lock/unlock to make sure thread in forward() is sleeping
-            std::unique_lock<std::mutex> lk(x->mutex);
-        }
-        x->cv.notify_all();
-    }
+    // Wake all pending requests; they throw NetworkHaltException.
+    m_queue.drain();
 }
 
 template <typename net_t>
 void OpenCLScheduler<net_t>::resume() {
     // UCTNode::think() should wait for all child threads to complete before resuming.
-    assert(m_forward_queue.empty());
-
-    m_draining = false;
+    assert(m_queue.empty());
+    m_queue.resume();
 }
 
 template class OpenCLScheduler<float>;

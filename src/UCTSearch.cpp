@@ -51,6 +51,7 @@
 #include "Timing.h"
 #include "Training.h"
 #include "Utils.h"
+#include "BatchQueue.h"
 #ifdef USE_OPENCL
 #include "OpenCLScheduler.h"
 #endif
@@ -852,11 +853,9 @@ int UCTSearch::think(const int color, const passflag_t passflag) {
              m_root->get_visits(), m_nodes.load(), m_playouts.load(),
              (m_playouts * 100.0) / (elapsed_centis + 1));
 
-#ifdef USE_OPENCL
 #ifndef NDEBUG
     myprintf("batch stats: %d %d\n",
              batch_stats.single_evals.load(), batch_stats.batch_evals.load());
-#endif
 #endif
 
     int bestmove = get_best_move(passflag);

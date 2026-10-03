@@ -55,6 +55,9 @@
 #endif
 #include "CPUPipe.h"
 #include "Network.h"
+#ifdef USE_METAL
+#include "MetalPipe.h"
+#endif
 #include "zlib.h"
 #ifdef USE_OPENCL
 #include "OpenCLScheduler.h"
@@ -69,6 +72,7 @@
 #include "Random.h"
 #include "ThreadPool.h"
 #include "Timing.h"
+#include "Platform.h"
 #include "Utils.h"
 
 namespace x3 = boost::spirit::x3;
@@ -494,7 +498,16 @@ void Network::select_precision(const int channels) {
 
 void Network::initialize(const int playouts, const std::string& weightsfile) {
 #ifdef USE_BLAS
-#ifndef __APPLE__
+#ifdef __APPLE__
+    // Search threads provide the parallelism; keep each sgemm on its own
+    // thread, like openblas_set_num_threads(1) below.
+    if (__builtin_available(macOS 15.0, *)) {
+        BLASSetThreading(BLAS_THREADING_SINGLE_THREADED);
+    }
+    const auto feature = Platform::cpu_feature_string();
+    myprintf("BLAS Core: Apple Accelerate%s.\n",
+             feature.empty() ? "" : (" (" + feature + ")").c_str());
+#else
 #ifdef USE_OPENBLAS
     openblas_set_num_threads(1);
     myprintf("BLAS Core: %s\n", openblas_get_corename());
@@ -537,20 +550,6 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
         exit(EXIT_FAILURE);
     }
 
-    auto weight_index = size_t{0};
-    // Input convolution
-    // Winograd transform convolution weights
-    m_fwd_weights->m_conv_weights[weight_index] = winograd_transform_f(
-        m_fwd_weights->m_conv_weights[weight_index], channels, INPUT_CHANNELS);
-    weight_index++;
-
-    // Residual block convolutions
-    for (auto i = size_t{0}; i < residual_blocks * 2; i++) {
-        m_fwd_weights->m_conv_weights[weight_index] = winograd_transform_f(
-            m_fwd_weights->m_conv_weights[weight_index], channels, channels);
-        weight_index++;
-    }
-
     // Biases are not calculated and are typically zero but some networks might
     // still have non-zero biases.
     // Move biases to batchnorm means to make the output match without having
@@ -575,7 +574,24 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
         m_fwd_weights->m_conv_pol_b[i] = 0.0f;
     }
 
-#ifdef USE_OPENCL
+#if defined(USE_METAL)
+    if (cfg_cpu_only) {
+        myprintf("Initializing CPU-only evaluation.\n");
+        m_forward = init_net(channels, std::make_unique<CPUPipe>());
+    } else {
+        try {
+            auto pipe = std::make_unique<MetalPipe>();
+            pipe->initialize(channels);
+            myprintf("%s.\n", pipe->describe().c_str());
+            pipe->push_weights(WINOGRAD_ALPHA, INPUT_CHANNELS, channels,
+                               m_fwd_weights);
+            m_forward = std::move(pipe);
+        } catch (const std::exception& e) {
+            myprintf("%s; falling back to the CPU.\n", e.what());
+            m_forward = init_net(channels, std::make_unique<CPUPipe>());
+        }
+    }
+#elif defined(USE_OPENCL)
     if (cfg_cpu_only) {
         myprintf("Initializing CPU-only evaluation.\n");
         m_forward = init_net(channels, std::make_unique<CPUPipe>());

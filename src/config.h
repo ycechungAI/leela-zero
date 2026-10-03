@@ -113,7 +113,11 @@ static constexpr auto KOMI = 7.5f;
 //#define USE_TUNER
 
 static constexpr auto PROGRAM_NAME = "Leela Zero";
-static constexpr auto PROGRAM_VERSION = "0.17";
+// Set from project(VERSION ...) in CMakeLists.txt, the single source of truth.
+#ifndef LZ_VERSION
+#error "LZ_VERSION is not defined; build with CMake"
+#endif
+static constexpr auto PROGRAM_VERSION = LZ_VERSION;
 
 /*
  * OpenBLAS limitation: the default configuration on some Linuxes

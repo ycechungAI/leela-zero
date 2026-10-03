@@ -1,0 +1,122 @@
+name: ci
+
+on:
+  push:
+    branches: [next, apple-silicon, "as/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-cpu:
+    name: macOS arm64 / CPU (Accelerate) + parity
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install boost qtbase
+      - name: Build (Accelerate)
+        run: |
+          cmake --preset macos-cpu
+          cmake --build --preset macos-cpu -j"$(sysctl -n hw.ncpu)"
+      - name: Build autogtp and validation (Qt 6)
+        run: cmake --build build --target autogtp validation -j"$(sysctl -n hw.ncpu)"
+      - name: Unit tests
+        run: ctest --preset macos-cpu
+      - name: GTP smoke test (random network)
+        run: scripts/macos/debug.sh smoke
+      - name: Build Eigen-only reference
+        run: |
+          cmake -S . -B build-eigen -DUSE_CPU_ONLY=ON -DUSE_BLAS=OFF -DLZ_BUILD_TESTS=OFF
+          cmake --build build-eigen -j"$(sysctl -n hw.ncpu)" --target leelaz
+      - name: Parity gate G1 (Accelerate vs Eigen)
+        run: |
+          python3 scripts/macos/make_random_net.py net.txt --blocks 6 --filters 64
+          python3 scripts/macos/selfplay.py --leelaz build/leelaz -w net.txt \
+              -o positions -n 1 -v 2
+          python3 scripts/parity/compare_backends.py \
+              --ref build-eigen/leelaz --test build/leelaz -w net.txt \
+              --sgf 'positions/*.sgf' --moves 0,10,60,200 --tol 1e-5
+
+  macos-asan:
+    name: macOS arm64 / ASan + UBSan
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install boost
+      - name: Build
+        run: |
+          cmake --preset macos-asan
+          cmake --build --preset macos-asan -j"$(sysctl -n hw.ncpu)"
+      - name: Unit tests
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --preset macos-asan
+
+  macos-opencl:
+    name: macOS arm64 / OpenCL (compile only)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install boost
+      - name: Build
+        run: |
+          cmake --preset macos-opencl
+          cmake --build --preset macos-opencl -j"$(sysctl -n hw.ncpu)"
+
+  linux-cpu:
+    name: Linux x86_64 / CPU (OpenBLAS)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libboost-program-options-dev \
+              libopenblas-dev zlib1g-dev qt6-base-dev
+      - name: Build
+        run: |
+          cmake --preset linux-cpu
+          cmake --build --preset linux-cpu -j"$(nproc)"
+          cmake --build build --target autogtp validation -j"$(nproc)"
+      - name: Unit tests
+        run: ctest --preset linux-cpu
+
+  windows-cpu:
+    name: Windows x64 / CPU (Eigen, vcpkg)
+    runs-on: windows-2022
+    steps:
+      - name: Point VCPKG_ROOT at the runner's vcpkg
+        shell: pwsh
+        run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Build
+        run: |
+          cmake --preset windows-cpu
+          cmake --build --preset windows-cpu
+      - name: Unit tests
+        run: ctest --preset windows-cpu
+      - name: Stack trace of failing tests (on failure)
+        if: failure()
+        shell: pwsh
+        run: |
+          cmake --build build --config RelWithDebInfo --target tests
+          $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+          Set-Location src
+          & $cdb -g -G -lines -c "!analyze -v; ~*kp; q" ..\build\RelWithDebInfo\tests.exe

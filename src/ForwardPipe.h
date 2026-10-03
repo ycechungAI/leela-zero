@@ -39,7 +39,9 @@ class ForwardPipe {
 public:
     class ForwardPipeWeights {
     public:
-        // Input + residual block tower
+        // Input + residual block tower. Raw OIHW 3x3 weights; biases are
+        // already folded into the batchnorm means and the "stddevs" are
+        // already scales (1 / sqrt(var + eps)).
         std::vector<std::vector<float>> m_conv_weights;
         std::vector<std::vector<float>> m_conv_biases;
         std::vector<std::vector<float>> m_batchnorm_means;

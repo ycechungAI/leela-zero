@@ -29,10 +29,10 @@
 
 #include "config.h"
 
-#include <boost/filesystem.hpp>
 #include <boost/math/distributions/students_t.hpp>
 #include <cstdarg>
 #include <cstdio>
+#include <filesystem>
 #include <mutex>
 
 #include "Utils.h"
@@ -84,32 +84,40 @@ bool Utils::input_pending() {
     select(1, &read_fds, nullptr, nullptr, &timeout);
     return FD_ISSET(0, &read_fds);
 #else
-    static int init = 0, pipe;
+    static int init = 0, pipe, console;
     static HANDLE inh;
     DWORD dw;
 
     if (!init) {
         init = 1;
         inh = GetStdHandle(STD_INPUT_HANDLE);
-        pipe = !GetConsoleMode(inh, &dw);
-        if (!pipe) {
+        console = GetConsoleMode(inh, &dw);
+        pipe = !console && GetFileType(inh) == FILE_TYPE_PIPE;
+        if (console) {
             SetConsoleMode(inh,
                            dw & ~(ENABLE_MOUSE_INPUT | ENABLE_WINDOW_INPUT));
             FlushConsoleInputBuffer(inh);
         }
     }
 
+    if (!console && !pipe) {
+        // A file or the NUL device: always readable, as select() reports
+        // on POSIX. Peeking it as a pipe would fail and exit the engine.
+        return true;
+    }
+
+    // A closed pipe or console counts as pending input (EOF), like select()
+    // on POSIX: the search stops and the GTP loop reads EOF and shuts down.
+    // Calling exit() here, from a search thread, crashed the process.
     if (pipe) {
         if (!PeekNamedPipe(inh, nullptr, 0, nullptr, &dw, nullptr)) {
-            myprintf("Nothing at other end - exiting\n");
-            exit(EXIT_FAILURE);
+            return true;
         }
 
         return dw;
     } else {
         if (!GetNumberOfConsoleInputEvents(inh, &dw)) {
-            myprintf("Nothing at other end - exiting\n");
-            exit(EXIT_FAILURE);
+            return true;
         }
 
         return dw > 1;
@@ -216,7 +224,7 @@ size_t Utils::ceilMultiple(const size_t a, const size_t b) {
 
 std::string Utils::leelaz_file(const std::string& file) {
 #if defined(_WIN32) || defined(__ANDROID__)
-    boost::filesystem::path dir(boost::filesystem::current_path());
+    std::filesystem::path dir(std::filesystem::current_path());
 #else
     // https://stackoverflow.com/a/26696759
     const char* homedir;
@@ -228,10 +236,10 @@ std::string Utils::leelaz_file(const std::string& file) {
         }
         homedir = pwd->pw_dir;
     }
-    boost::filesystem::path dir(homedir);
+    std::filesystem::path dir(homedir);
     dir /= ".local/share/leela-zero";
 #endif
-    boost::filesystem::create_directories(dir);
+    std::filesystem::create_directories(dir);
     dir /= file;
     return dir.string();
 }

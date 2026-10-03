@@ -2,7 +2,7 @@
 
 ## C++ Usage
 
-Leela Zero is written in C++14, and generally encourages writing in modern C++ style.
+Leela Zero is written in C++17, and generally encourages writing in modern C++ style.
 
 This means that:
 

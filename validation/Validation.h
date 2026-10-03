@@ -43,7 +43,7 @@ public:
               const QString& keep, int expected);
     void run() override;
     void doFinish() {
-        m_state.store(FINISHING);
+        m_state.storeRelaxed(FINISHING);
     }
 
 signals:

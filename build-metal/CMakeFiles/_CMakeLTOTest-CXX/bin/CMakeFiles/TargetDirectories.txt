@@ -1,0 +1,4 @@
+/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/foo.dir
+/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/boo.dir
+/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/edit_cache.dir
+/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/rebuild_cache.dir

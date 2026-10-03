@@ -27,7 +27,6 @@
 #include <QtCore/QStringList>
 #include <QtCore/QTextStream>
 #include <QtCore/QTimer>
-#include <QtWidgets/QShortcut>
 #include <chrono>
 #ifdef WIN32
 #include <direct.h>
@@ -117,12 +116,12 @@ int main(int argc, char* argv[]) {
 
     // Map streams
     QTextStream cerr(stderr, QIODevice::WriteOnly);
-    cerr << "AutoGTP v" << AUTOGTP_VERSION << endl;
-    cerr << "Using " << gamesNum << " game thread(s) per device." << endl;
+    cerr << "AutoGTP v" << AUTOGTP_VERSION << Qt::endl;
+    cerr << "Using " << gamesNum << " game thread(s) per device." << Qt::endl;
     if (parser.isSet(keepSgfOption)) {
         if (!QDir().mkpath(parser.value(keepSgfOption))) {
             cerr << "Couldn't create output directory for self-play SGF files!"
-                 << endl;
+                 << Qt::endl;
             return EXIT_FAILURE;
         }
     }
@@ -130,13 +129,13 @@ int main(int argc, char* argv[]) {
         if (!QDir().mkpath(parser.value(keepDebugOption))) {
             cerr
                 << "Couldn't create output directory for self-play Debug files!"
-                << endl;
+                << Qt::endl;
             return EXIT_FAILURE;
         }
     }
     Console* cons = nullptr;
     if (!QDir().mkpath("networks")) {
-        cerr << "Couldn't create the directory for the networks files!" << endl;
+        cerr << "Couldn't create the directory for the networks files!" << Qt::endl;
         return EXIT_FAILURE;
     }
     Management* boss =

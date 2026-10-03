@@ -40,7 +40,7 @@ public:
     void order(Order o);
     void doFinish() {
         m_job->finish();
-        m_state.store(FINISHING);
+        m_state.storeRelaxed(FINISHING);
     }
     void doStore();
     void run() override;

@@ -29,6 +29,10 @@
 
 #include "config.h"
 
+#include <algorithm>
+#include <array>
+#include <cstring>
+
 #ifdef __APPLE__
 #include <Accelerate/Accelerate.h>
 #endif
@@ -60,55 +64,177 @@ void CPUPipe::initialize(int channels) {
     m_input_channels = channels;
 }
 
+namespace {
+
+// The Winograd transforms are written once, generic over T, and run on
+// several independent values at a time: T = vecf works on VEC_LANES of them
+// per instruction, T = float on one. Each lane performs the scalar
+// operations in the same order; only FMA contraction may differ, which moves
+// results by a few ulps (well inside the G1 parity tolerance).
+#if defined(__GNUC__) || defined(__clang__)
+// 4 floats: NEON on arm64, SSE on x86-64.
+typedef float vecf __attribute__((vector_size(16)));
+#else
+using vecf = float;
+#endif
+constexpr auto VEC_LANES = int{sizeof(vecf) / sizeof(float)};
+
+// Side of the zero-padded input plane: one border cell plus the tiles' overhang.
+constexpr auto PAD_W = 2 + WINOGRAD_M * WINOGRAD_WTILES;
+
+// Unaligned load/store between T and VEC_LANES-wide float runs. The memcpy
+// compiles to a single vector load/store.
+template <typename T>
+T load(const float* const src) {
+    T v;
+    std::memcpy(&v, src, sizeof(T));
+    return v;
+}
+
+template <typename T>
+void store(float* const dst, const T& v) {
+    std::memcpy(dst, &v, sizeof(T));
+}
+
+// multiple vector [i0..i5] by Bt and produce [o0..o5]
+// const auto Bt = std::array<float, WINOGRAD_TILE>{
+//     1.0f,  0.0f,       -5.0f / 2.0f,  0.0f,        1.0f, 0.0f,
+//     0.0f, -SQ2,        -2.0f,         SQ2 / 2.0f,  1.0f, 0.0f,
+//     0.0f,  SQ2,        -2.0f,        -SQ2 / 2.0f,  1.0f, 0.0f,
+//     0.0f, -SQ2 / 2.0f, -1.0f / 2.0f,  SQ2,         1.0f, 0.0f,
+//     0.0f,  SQ2 / 2.0f, -1.0f / 2.0f, -SQ2,         1.0f, 0.0f,
+//     0.0f,  1.0f,        0.0f,        -5.0f / 2.0f, 0.0f, 1.0f};
+template <typename T>
+inline void multiply_bt(T& o0, T& o1, T& o2, T& o3, T& o4, T& o5,
+                        const T i0, const T i1, const T i2,
+                        const T i3, const T i4, const T i5) {
+    const T i3m1 = i1 * -SQ2 + i3 * (SQ2 / 2.0f);
+    const T i4m2 = i2 * -2.0f + i4 * 1.0f;
+
+    o0 = i0 + i2 * (-5.0f / 2.0f) + i4;
+    o1 = i3m1 + i4m2;
+    o2 = -i3m1 + i4m2;
+
+    const T i3m1_2 = i3 * (SQ2) + i1 * (-SQ2 / 2.0f);
+    const T i4m2_2 = i2 * (-1.0f / 2.0f) + i4;
+
+    o3 = i3m1_2 + i4m2_2;
+    o4 = -i3m1_2 + i4m2_2;
+
+    o5 = i1 + i3 * (-5.0f / 2.0f) + i5;
+}
+
+// multiple vector [i0..i5] by At and produce [o0..o3]
+// const auto At = std::array<float, WINOGRAD_ALPHA * WINOGRAD_M>{
+//     1.0f, 1.0f,        1.0f,        1.0f,        1.0f,       0.0f,
+//     0.0f, SQ2 / 2.0f, -SQ2 / 2.0f,  SQ2,        -SQ2,        0.0f,
+//     0.0f, 1.0f / 2.0f, 1.0f / 2.0f, 2.0f,        2.0f,       0.0f,
+//     0.0f, SQ2 / 4.0f, -SQ2 / 4.0f,  2.0f * SQ2, -2.0f * SQ2, 1.0f};
+template <typename T>
+inline void multiply_at(T& o0, T& o1, T& o2, T& o3,
+                        const T i0, const T i1, const T i2,
+                        const T i3, const T i4, const T i5) {
+    const T t1p2 = (i1 + i2) * (1.0f / 2.0f);
+    const T t1m2 = (i1 - i2) * (SQ2 / 4.0f);
+    const T t3p4 = i3 + i4;
+    const T t3m4 = (i3 - i4) * (SQ2);
+
+    o0 = i0 + t1p2 + t1p2 + t3p4;
+    o1 = t1m2 + t1m2 + t3m4;
+    o2 = t1p2 + t3p4 + t3p4;
+    o3 = t1m2 + t3m4 + t3m4 + i5;
+}
+
+// Output transform of the consecutive tiles [b, b + lanes) of one output
+// channel. M points at the channel's first tile in the first Winograd
+// element; elements are stride apart. Y points at the channel's output plane.
+// Each output is batch-normalized and passed through ReLU on its way out:
+// max(0, scale * (x - mean) [+ res]), where res is the channel's residual
+// plane or null.
+template <typename T>
+void transform_out_tiles(const float* const M, const int stride, const int b,
+                         const float mean, const float scale,
+                         const float* const res, float* const Y) {
+    constexpr auto W = BOARD_SIZE;
+    constexpr auto H = BOARD_SIZE;
+    constexpr auto lanes = int{sizeof(T) / sizeof(float)};
+
+    T temp_m[WINOGRAD_ALPHA][WINOGRAD_ALPHA];
+    for (auto xi = 0; xi < WINOGRAD_ALPHA; xi++) {
+        for (auto nu = 0; nu < WINOGRAD_ALPHA; nu++) {
+            temp_m[xi][nu] =
+                load<T>(M + (xi * WINOGRAD_ALPHA + nu) * stride + b);
+        }
+    }
+
+    // Calculates transpose(A).temp_m.A
+    T temp[WINOGRAD_M][WINOGRAD_ALPHA];
+    for (auto j = 0; j < WINOGRAD_ALPHA; j++) {
+        multiply_at(temp[0][j], temp[1][j], temp[2][j], temp[3][j],
+                    temp_m[0][j], temp_m[1][j], temp_m[2][j],
+                    temp_m[3][j], temp_m[4][j], temp_m[5][j]);
+    }
+
+    float o[WINOGRAD_M][WINOGRAD_M][lanes];
+    for (auto i = 0; i < WINOGRAD_M; i++) {
+        T o0, o1, o2, o3;
+        multiply_at(o0, o1, o2, o3,
+                    temp[i][0], temp[i][1], temp[i][2],
+                    temp[i][3], temp[i][4], temp[i][5]);
+        store(o[i][0], o0);
+        store(o[i][1], o1);
+        store(o[i][2], o2);
+        store(o[i][3], o3);
+    }
+
+    for (auto lane = 0; lane < lanes; lane++) {
+        const auto tile = b + lane;
+        const auto y = WINOGRAD_M * (tile / WINOGRAD_WTILES);
+        const auto x = WINOGRAD_M * (tile % WINOGRAD_WTILES);
+        // The last row and column of tiles hang over the board edge.
+        const auto rows = std::min(WINOGRAD_M, H - y);
+        const auto cols = std::min(WINOGRAD_M, W - x);
+        for (auto i = 0; i < rows; i++) {
+            for (auto j = 0; j < cols; j++) {
+                const auto idx = (y + i) * W + x + j;
+                auto v = scale * (o[i][j][lane] - mean);
+                if (res != nullptr) {
+                    v += res[idx];
+                }
+                Y[idx] = std::max(0.0f, v);
+            }
+        }
+    }
+}
+
+} // namespace
+
 void CPUPipe::winograd_transform_in(const std::vector<float>& in,
                                     std::vector<float>& V, const int C) {
     constexpr auto W = BOARD_SIZE;
     constexpr auto H = BOARD_SIZE;
     constexpr auto WTILES = WINOGRAD_WTILES;
     constexpr auto P = WINOGRAD_P;
+    constexpr auto lanes = VEC_LANES;
 
-    constexpr auto Wpad = 2 + WINOGRAD_M * WTILES;
-
-    constexpr auto buffersize = 32;
-
-    std::array<std::array<float, Wpad>, Wpad> in_pad{{{0.0f}}};
-
-    std::array<float, buffersize * WINOGRAD_ALPHA * WINOGRAD_ALPHA> buffer;
-    auto buffer_offset = 0;
-    auto buffer_entries = 0;
-
-    // multiple vector [i0..i5] by Bt and produce [o0..o5]
-    // const auto Bt = std::array<float, WINOGRAD_TILE>{
-    //     1.0f,  0.0f,       -5.0f / 2.0f,  0.0f,        1.0f, 0.0f,
-    //     0.0f, -SQ2,        -2.0f,         SQ2 / 2.0f,  1.0f, 0.0f,
-    //     0.0f,  SQ2,        -2.0f,        -SQ2 / 2.0f,  1.0f, 0.0f,
-    //     0.0f, -SQ2 / 2.0f, -1.0f / 2.0f,  SQ2,         1.0f, 0.0f,
-    //     0.0f,  SQ2 / 2.0f, -1.0f / 2.0f, -SQ2,         1.0f, 0.0f,
-    //     0.0f,  1.0f,        0.0f,        -5.0f / 2.0f, 0.0f, 1.0f};
-    const auto multiply_bt = [](float& o0, float& o1, float& o2,
-                                float& o3, float& o4, float& o5,
-                                const float i0, const float i1, const float i2,
-                                const float i3, const float i4, const float i5) {
-        auto i3m1 = i1 * -SQ2 + i3 * (SQ2 / 2.0f);
-        auto i4m2 = i2 * -2.0f + i4 * 1.0f;
-
-        o0 = i0 + i2 * (-5.0f / 2.0f) + i4;
-        o1 = i3m1 + i4m2;
-        o2 = -i3m1 + i4m2;
-
-        auto i3m1_2 = i3 * (SQ2) + i1 * (-SQ2 / 2.0f);
-        auto i4m2_2 = i2 * (-1.0f / 2.0f) + i4;
-
-        o3 = i3m1_2 + i4m2_2;
-        o4 = -i3m1_2 + i4m2_2;
-
-        o5 = i1 + i3 * (-5.0f / 2.0f) + i5;
+    // Padded input of `lanes` channels, interleaved so that one vecf holds
+    // the same point of every channel. The border stays zero.
+    std::array<float, PAD_W * PAD_W * lanes> in_pad{};
+    const auto pad = [&in_pad](const int y, const int x) {
+        return &in_pad[(y * PAD_W + x) * VEC_LANES];
     };
 
-    for (auto ch = 0; ch < C; ch++) {
-        for (auto yin = 0; yin < H; yin++) {
-            for (auto xin = 0; xin < W; xin++) {
-                in_pad[yin + 1][xin + 1] = in[ch * (W * H) + yin * W + xin];
+    // Vectorized across channels: each pass transforms channels
+    // [c0, c0 + lanes); lanes past C compute zeros that are never stored.
+    for (auto c0 = 0; c0 < C; c0 += lanes) {
+        const auto valid = std::min(lanes, C - c0);
+        for (auto lane = 0; lane < lanes; lane++) {
+            const auto src = &in[(c0 + lane) * (W * H)];
+            for (auto yin = 0; yin < H; yin++) {
+                for (auto xin = 0; xin < W; xin++) {
+                    pad(yin + 1, xin + 1)[lane] =
+                        lane < valid ? src[yin * W + xin] : 0.0f;
+                }
             }
         }
         for (auto block_y = 0; block_y < WTILES; block_y++) {
@@ -116,66 +242,38 @@ void CPUPipe::winograd_transform_in(const std::vector<float>& in,
             const auto yin = WINOGRAD_M * block_y;
             for (auto block_x = 0; block_x < WTILES; block_x++) {
                 const auto xin = WINOGRAD_M * block_x;
-#define DECL_T1(XX)                                                            \
-    float T1_##XX##_0, T1_##XX##_1, T1_##XX##_2, T1_##XX##_3, T1_##XX##_4,     \
-        T1_##XX##_5;
-                DECL_T1(0)
-                DECL_T1(1)
-                DECL_T1(2)
-                DECL_T1(3)
-                DECL_T1(4)
-                DECL_T1(5)
+                const auto tile = block_y * WTILES + block_x;
 
                 // Calculates transpose(B).x.B
-#define MULTIPLY_BT(XX)                                                        \
-    multiply_bt(T1_0_##XX, T1_1_##XX, T1_2_##XX, T1_3_##XX, T1_4_##XX,         \
-                T1_5_##XX,                                                     \
-                in_pad[yin + 0][xin + XX],                                     \
-                in_pad[yin + 1][xin + XX],                                     \
-                in_pad[yin + 2][xin + XX],                                     \
-                in_pad[yin + 3][xin + XX],                                     \
-                in_pad[yin + 4][xin + XX],                                     \
-                in_pad[yin + 5][xin + XX]);
-                MULTIPLY_BT(0)
-                MULTIPLY_BT(1)
-                MULTIPLY_BT(2)
-                MULTIPLY_BT(3)
-                MULTIPLY_BT(4)
-                MULTIPLY_BT(5)
-
-#define MULTIPLY_B(XX)                                                         \
-    multiply_bt(                                                               \
-        buffer[buffersize * (XX * WINOGRAD_ALPHA + 0) + buffer_entries],       \
-        buffer[buffersize * (XX * WINOGRAD_ALPHA + 1) + buffer_entries],       \
-        buffer[buffersize * (XX * WINOGRAD_ALPHA + 2) + buffer_entries],       \
-        buffer[buffersize * (XX * WINOGRAD_ALPHA + 3) + buffer_entries],       \
-        buffer[buffersize * (XX * WINOGRAD_ALPHA + 4) + buffer_entries],       \
-        buffer[buffersize * (XX * WINOGRAD_ALPHA + 5) + buffer_entries],       \
-        T1_##XX##_0, T1_##XX##_1, T1_##XX##_2, T1_##XX##_3, T1_##XX##_4,       \
-        T1_##XX##_5);
-                MULTIPLY_B(0)
-                MULTIPLY_B(1)
-                MULTIPLY_B(2)
-                MULTIPLY_B(3)
-                MULTIPLY_B(4)
-                MULTIPLY_B(5)
-
-                if (buffer_entries == 0) {
-                    buffer_offset = ch * P + block_y * WTILES + block_x;
+                vecf T1[WINOGRAD_ALPHA][WINOGRAD_ALPHA];
+                for (auto xx = 0; xx < WINOGRAD_ALPHA; xx++) {
+                    multiply_bt(T1[0][xx], T1[1][xx], T1[2][xx], T1[3][xx],
+                                T1[4][xx], T1[5][xx],
+                                load<vecf>(pad(yin + 0, xin + xx)),
+                                load<vecf>(pad(yin + 1, xin + xx)),
+                                load<vecf>(pad(yin + 2, xin + xx)),
+                                load<vecf>(pad(yin + 3, xin + xx)),
+                                load<vecf>(pad(yin + 4, xin + xx)),
+                                load<vecf>(pad(yin + 5, xin + xx)));
                 }
-                buffer_entries++;
 
-                if (buffer_entries >= buffersize
-                    || (ch == C - 1 && block_x == WTILES - 1
-                        && block_y == WTILES - 1)) {
+                for (auto xx = 0; xx < WINOGRAD_ALPHA; xx++) {
+                    vecf o[WINOGRAD_ALPHA];
+                    multiply_bt(o[0], o[1], o[2], o[3], o[4], o[5],
+                                T1[xx][0], T1[xx][1], T1[xx][2],
+                                T1[xx][3], T1[xx][4], T1[xx][5]);
 
-                    for (auto i = 0; i < WINOGRAD_ALPHA * WINOGRAD_ALPHA; i++) {
-                        for (auto entry = 0; entry < buffer_entries; entry++) {
-                            V[i * C * P + buffer_offset + entry] =
-                                buffer[i * buffersize + entry];
+                    // V is [element][channel][tile]. Consecutive tiles fill
+                    // each run in turn, so the stores stay in L1.
+                    for (auto nu = 0; nu < WINOGRAD_ALPHA; nu++) {
+                        float out[lanes];
+                        store(out, o[nu]);
+                        const auto dst = &V[(xx * WINOGRAD_ALPHA + nu) * C * P
+                                            + c0 * P + tile];
+                        for (auto lane = 0; lane < valid; lane++) {
+                            dst[lane * P] = out[lane];
                         }
                     }
-                    buffer_entries = 0;
                 }
             }
         }
@@ -210,75 +308,28 @@ void CPUPipe::winograd_sgemm(const std::vector<float>& U,
 }
 
 void CPUPipe::winograd_transform_out(const std::vector<float>& M,
-                                     std::vector<float>& Y, const int K) {
-    constexpr auto W = BOARD_SIZE;
-    constexpr auto H = BOARD_SIZE;
-    constexpr auto WTILES = WINOGRAD_WTILES;
+                                     std::vector<float>& Y, const int K,
+                                     const float* const means,
+                                     const float* const stddevs,
+                                     const float* const eltwise) {
     constexpr auto P = WINOGRAD_P;
 
-    // multiple vector [i0..i5] by At and produce [o0..o3]
-    // const auto At = std::array<float, WINOGRAD_ALPHA * WINOGRAD_M>{
-    //     1.0f, 1.0f,        1.0f,        1.0f,        1.0f,       0.0f,
-    //     0.0f, SQ2 / 2.0f, -SQ2 / 2.0f,  SQ2,        -SQ2,        0.0f,
-    //     0.0f, 1.0f / 2.0f, 1.0f / 2.0f, 2.0f,        2.0f,       0.0f,
-    //     0.0f, SQ2 / 4.0f, -SQ2 / 4.0f,  2.0f * SQ2, -2.0f * SQ2, 1.0f};
-    const auto multiply_at = [](float& o0, float& o1, float& o2, float& o3,
-                                const float i0, const float i1,
-                                const float i2, const float i3,
-                                const float i4, const float i5) {
-        auto t1p2 = (i1 + i2) * (1.0f / 2.0f);
-        auto t1m2 = (i1 - i2) * (SQ2 / 4.0f);
-        auto t3p4 = i3 + i4;
-        auto t3m4 = (i3 - i4) * (SQ2);
-
-        o0 = i0 + t1p2 + t1p2 + t3p4;
-        o1 = t1m2 + t1m2 + t3m4;
-        o2 = t1p2 + t3p4 + t3p4;
-        o3 = t1m2 + t3m4 + t3m4 + i5;
-    };
-
+    // Vectorized across tiles: a channel's P tiles are contiguous in M, so
+    // VEC_LANES of them load as one vecf. The P % VEC_LANES leftover tiles
+    // take the scalar path; a vector load there would read past the channel.
     for (auto k = 0; k < K; k++) {
-        for (auto block_x = 0; block_x < WTILES; block_x++) {
-            const auto x = WINOGRAD_M * block_x;
-            for (auto block_y = 0; block_y < WTILES; block_y++) {
-                const auto y = WINOGRAD_M * block_y;
-
-                const auto b = block_y * WTILES + block_x;
-                using WinogradTile =
-                    std::array<std::array<float, WINOGRAD_ALPHA>,
-                               WINOGRAD_ALPHA>;
-                WinogradTile temp_m;
-                for (auto xi = 0; xi < WINOGRAD_ALPHA; xi++) {
-                    for (auto nu = 0; nu < WINOGRAD_ALPHA; nu++) {
-                        temp_m[xi][nu] =
-                            M[(xi * WINOGRAD_ALPHA + nu) * K * P + k * P + b];
-                    }
-                }
-                std::array<std::array<float, WINOGRAD_ALPHA>, WINOGRAD_M> temp;
-                std::array<std::array<float, WINOGRAD_M>, WINOGRAD_M> o;
-
-                // Calculates transpose(A).temp_m.A
-                for (auto j = 0; j < WINOGRAD_ALPHA; j++) {
-                    multiply_at(temp[0][j], temp[1][j], temp[2][j], temp[3][j],
-                                temp_m[0][j], temp_m[1][j], temp_m[2][j],
-                                temp_m[3][j], temp_m[4][j], temp_m[5][j]);
-                }
-
-                for (auto i = 0; i < WINOGRAD_M; i++) {
-                    multiply_at(o[i][0], o[i][1], o[i][2], o[i][3],
-                                temp[i][0], temp[i][1], temp[i][2],
-                                temp[i][3], temp[i][4], temp[i][5]);
-                }
-
-                const auto y_ind = k * H * W + y * W + x;
-                for (auto i = 0; i < WINOGRAD_M; i++) {
-                    for (auto j = 0; j < WINOGRAD_M; j++) {
-                        if (y + i < H && x + j < W) {
-                            Y[y_ind + i * W + j] = o[i][j];
-                        }
-                    }
-                }
-            }
+        const auto src = &M[k * P];
+        const auto dst = &Y[k * NUM_INTERSECTIONS];
+        const auto res =
+            eltwise == nullptr ? nullptr : &eltwise[k * NUM_INTERSECTIONS];
+        auto b = 0;
+        for (; b + VEC_LANES <= P; b += VEC_LANES) {
+            transform_out_tiles<vecf>(src, K * P, b, means[k], stddevs[k], res,
+                                      dst);
+        }
+        for (; b < P; b++) {
+            transform_out_tiles<float>(src, K * P, b, means[k], stddevs[k], res,
+                                       dst);
         }
     }
 }
@@ -288,14 +339,17 @@ void CPUPipe::winograd_convolve3(const int outputs,
                                  const std::vector<float>& U,
                                  std::vector<float>& V,
                                  std::vector<float>& M,
-                                 std::vector<float>& output) {
+                                 std::vector<float>& output,
+                                 const float* const means,
+                                 const float* const stddevs,
+                                 const float* const eltwise) {
 
     constexpr unsigned int filter_len = WINOGRAD_ALPHA * WINOGRAD_ALPHA;
     const auto input_channels = U.size() / (outputs * filter_len);
 
     winograd_transform_in(input, V, input_channels);
     winograd_sgemm(U, V, M, input_channels, outputs);
-    winograd_transform_out(M, output, outputs);
+    winograd_transform_out(M, output, outputs, means, stddevs, eltwise);
 }
 
 template <unsigned int filter_size>
@@ -349,33 +403,6 @@ void convolve(const size_t outputs,
     }
 }
 
-template <size_t spatial_size>
-void batchnorm(const size_t channels,
-               std::vector<float>& data,
-               const float* const means,
-               const float* const stddevs,
-               const float* const eltwise = nullptr) {
-    for (auto c = size_t{0}; c < channels; ++c) {
-        const auto mean = means[c];
-        const auto scale_stddev = stddevs[c];
-        const auto arr = &data[c * spatial_size];
-
-        if (eltwise == nullptr) {
-            // Classical BN
-            for (auto b = size_t{0}; b < spatial_size; b++) {
-                arr[b] = std::max(0.0f, scale_stddev * (arr[b] - mean));
-            }
-        } else {
-            // BN + residual add
-            const auto res = &eltwise[c * spatial_size];
-            for (auto b = size_t{0}; b < spatial_size; b++) {
-                arr[b] =
-                    std::max(0.0f, (scale_stddev * (arr[b] - mean)) + res[b]);
-            }
-        }
-    }
-}
-
 void CPUPipe::forward(const std::vector<float>& input,
                       std::vector<float>& output_pol,
                       std::vector<float>& output_val) {
@@ -394,32 +421,30 @@ void CPUPipe::forward(const std::vector<float>& input,
     auto V = std::vector<float>(WINOGRAD_TILE * input_channels * P);
     auto M = std::vector<float>(WINOGRAD_TILE * output_channels * P);
 
-    winograd_convolve3(output_channels, input, m_weights->m_conv_weights[0], V,
-                       M, conv_out);
-    batchnorm<NUM_INTERSECTIONS>(output_channels, conv_out,
-                                 m_weights->m_batchnorm_means[0].data(),
-                                 m_weights->m_batchnorm_stddevs[0].data());
+    // Each convolution applies its batch norm, ReLU and (for the second
+    // convolution of a block) the residual add as it writes its output.
+    winograd_convolve3(output_channels, input, m_conv_u[0], V,
+                       M, conv_out, m_weights->m_batchnorm_means[0].data(),
+                       m_weights->m_batchnorm_stddevs[0].data());
 
     // Residual tower
     auto conv_in = std::vector<float>(output_channels * NUM_INTERSECTIONS);
     auto res = std::vector<float>(output_channels * NUM_INTERSECTIONS);
-    for (auto i = size_t{1}; i < m_weights->m_conv_weights.size(); i += 2) {
+    for (auto i = size_t{1}; i < m_conv_u.size(); i += 2) {
         auto output_channels = m_input_channels;
         std::swap(conv_out, conv_in);
         winograd_convolve3(output_channels, conv_in,
-                           m_weights->m_conv_weights[i], V, M, conv_out);
-        batchnorm<NUM_INTERSECTIONS>(output_channels, conv_out,
-                                     m_weights->m_batchnorm_means[i].data(),
-                                     m_weights->m_batchnorm_stddevs[i].data());
+                           m_conv_u[i], V, M, conv_out,
+                           m_weights->m_batchnorm_means[i].data(),
+                           m_weights->m_batchnorm_stddevs[i].data());
 
         std::swap(conv_in, res);
         std::swap(conv_out, conv_in);
         winograd_convolve3(output_channels, conv_in,
-                           m_weights->m_conv_weights[i + 1], V, M, conv_out);
-        batchnorm<NUM_INTERSECTIONS>(
-            output_channels, conv_out,
-            m_weights->m_batchnorm_means[i + 1].data(),
-            m_weights->m_batchnorm_stddevs[i + 1].data(), res.data());
+                           m_conv_u[i + 1], V, M, conv_out,
+                           m_weights->m_batchnorm_means[i + 1].data(),
+                           m_weights->m_batchnorm_stddevs[i + 1].data(),
+                           res.data());
     }
     convolve<1>(Network::OUTPUTS_POLICY, conv_out, m_conv_pol_w, m_conv_pol_b,
                 output_pol);
@@ -433,6 +458,16 @@ void CPUPipe::push_weights(const unsigned int /*filter_size*/,
                            std::shared_ptr<const ForwardPipeWeights> weights) {
 
     m_weights = weights;
+
+    // Winograd-transform the raw 3x3 tower weights once, here.
+    m_conv_u.clear();
+    for (auto i = size_t{0}; i < weights->m_conv_weights.size(); i++) {
+        const auto inputs =
+            i == 0 ? static_cast<int>(Network::INPUT_CHANNELS)
+                   : static_cast<int>(outputs);
+        m_conv_u.push_back(Network::winograd_transform_f(
+            weights->m_conv_weights[i], static_cast<int>(outputs), inputs));
+    }
 
     // Output head convolutions
     m_conv_pol_w = weights->m_conv_pol_w;

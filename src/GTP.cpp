@@ -361,7 +361,7 @@ void GTP::setup_default_parameters() {
     cfg_logfile_handle = nullptr;
     cfg_quiet = false;
     cfg_benchmark = false;
-#ifdef USE_CPU_ONLY
+#if defined(USE_CPU_ONLY) && !defined(USE_METAL)
     cfg_cpu_only = true;
 #else
     cfg_cpu_only = false;
@@ -882,6 +882,38 @@ void GTP::execute(GameState& game, const std::string& xinput) {
         }
 
         gtp_printf(id, "");
+        return;
+    } else if (command.find("lz-nn-eval") == 0) {
+        // Unlisted debug command: raw network output for the current
+        // position, uncached, at full float precision, for comparing
+        // backends. Output: winrate, pass prior, 361 priors in board order.
+        std::istringstream cmdstream(command);
+        std::string tmp;
+        int symmetry = Network::IDENTITY_SYMMETRY;
+
+        cmdstream >> tmp; // eat lz-nn-eval
+        cmdstream >> symmetry;
+        if (cmdstream.fail()) {
+            symmetry = Network::IDENTITY_SYMMETRY;
+        }
+        if (symmetry < 0 || symmetry >= Network::NUM_SYMMETRIES) {
+            gtp_fail_printf(id, "symmetry must be 0-%d",
+                            Network::NUM_SYMMETRIES - 1);
+            return;
+        }
+
+        const auto vec = s_network->get_output(
+            &game, Network::Ensemble::DIRECT, symmetry, false, false);
+
+        std::string out;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.9g %.9g", vec.winrate, vec.policy_pass);
+        out += buf;
+        for (const auto p : vec.policy) {
+            snprintf(buf, sizeof(buf), " %.9g", p);
+            out += buf;
+        }
+        gtp_printf(id, "%s", out.c_str());
         return;
     } else if (command.find("fixed_handicap") == 0) {
         std::istringstream cmdstream(command);

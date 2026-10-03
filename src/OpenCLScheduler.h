@@ -35,34 +35,14 @@
 #include <thread>
 #include <vector>
 
+#include "BatchQueue.h"
 #include "ForwardPipe.h"
 #include "OpenCL.h"
 #include "SMP.h"
 #include "ThreadPool.h"
 
-#ifndef NDEBUG
-struct batch_stats_t {
-    std::atomic<size_t> single_evals{0};
-    std::atomic<size_t> batch_evals{0};
-};
-extern batch_stats_t batch_stats;
-#endif
-
 template <typename net_t>
 class OpenCLScheduler : public ForwardPipe {
-    class ForwardQueueEntry {
-    public:
-        std::mutex mutex;
-        std::condition_variable cv;
-        const std::vector<float>& in;
-        std::vector<float>& out_p;
-        std::vector<float>& out_v;
-        ForwardQueueEntry(const std::vector<float>& input,
-                          std::vector<float>& output_pol,
-                          std::vector<float>& output_val)
-            : in(input), out_p(output_pol), out_v(output_val) {}
-    };
-
 public:
     virtual ~OpenCLScheduler();
     OpenCLScheduler();
@@ -77,21 +57,10 @@ public:
         std::shared_ptr<const ForwardPipeWeights> weights);
 
 private:
-    bool m_running = true;
-    std::atomic<bool> m_draining{false};
     std::vector<std::unique_ptr<OpenCL_Network<net_t>>> m_networks;
     std::vector<std::unique_ptr<OpenCL<net_t>>> m_opencl;
 
-    std::mutex m_mutex;
-    std::condition_variable m_cv;
-
-    // start with 10 milliseconds : lock protected
-    int m_waittime{10};
-
-    // set to true when single (non-batch) eval is in progress
-    std::atomic<bool> m_single_eval_in_progress{false};
-
-    std::list<std::shared_ptr<ForwardQueueEntry>> m_forward_queue;
+    BatchQueue m_queue;
     std::list<std::thread> m_worker_threads;
 
     void batch_worker(size_t gnum);

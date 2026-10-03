@@ -55,20 +55,28 @@ private:
                         const std::vector<float>& V,
                         std::vector<float>& M, int C, int K);
 
+    // Also applies batch norm + ReLU per output channel, plus a residual add
+    // when eltwise is non-null.
     void winograd_transform_out(const std::vector<float>& M,
-                                std::vector<float>& Y, int K);
+                                std::vector<float>& Y, int K,
+                                const float* means, const float* stddevs,
+                                const float* eltwise);
 
     void winograd_convolve3(int outputs,
                             const std::vector<float>& input,
                             const std::vector<float>& U,
                             std::vector<float>& V,
                             std::vector<float>& M,
-                            std::vector<float>& output);
+                            std::vector<float>& output,
+                            const float* means, const float* stddevs,
+                            const float* eltwise = nullptr);
 
     int m_input_channels;
 
     // Input + residual block tower
     std::shared_ptr<const ForwardPipeWeights> m_weights;
+    // Tower convolution weights as Winograd tiles (see push_weights).
+    std::vector<std::vector<float>> m_conv_u;
 
     std::vector<float> m_conv_pol_w;
     std::vector<float> m_conv_val_w;
