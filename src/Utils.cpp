@@ -106,17 +106,18 @@ bool Utils::input_pending() {
         return true;
     }
 
+    // A closed pipe or console counts as pending input (EOF), like select()
+    // on POSIX: the search stops and the GTP loop reads EOF and shuts down.
+    // Calling exit() here, from a search thread, crashed the process.
     if (pipe) {
         if (!PeekNamedPipe(inh, nullptr, 0, nullptr, &dw, nullptr)) {
-            myprintf("Nothing at other end - exiting\n");
-            exit(EXIT_FAILURE);
+            return true;
         }
 
         return dw;
     } else {
         if (!GetNumberOfConsoleInputEvents(inh, &dw)) {
-            myprintf("Nothing at other end - exiting\n");
-            exit(EXIT_FAILURE);
+            return true;
         }
 
         return dw > 1;

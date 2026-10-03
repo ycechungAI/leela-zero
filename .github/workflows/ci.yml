@@ -109,3 +109,11 @@ jobs:
           cmake --build --preset windows-cpu
       - name: Unit tests
         run: ctest --preset windows-cpu
+      - name: Stack trace of failing tests (on failure)
+        if: failure()
+        shell: pwsh
+        run: |
+          cmake --build build --config RelWithDebInfo --target tests
+          $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+          Set-Location src
+          & $cdb -g -G -lines -c "!analyze -v; ~*kp; q" ..\build\RelWithDebInfo\tests.exe --gtest_filter=*Minmoves*
