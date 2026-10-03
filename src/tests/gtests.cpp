@@ -33,6 +33,7 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <memory>
+#include <iterator>
 #include <regex>
 #include <string>
 #include <vector>
@@ -373,6 +374,13 @@ TEST_F(LeelaTest, AnalyzeParseMinmoves) {
     gtp_execute("lz-setoption name pondering value false");
     gtp_execute("lz-setoption name playouts value 1");
     auto result = gtp_execute("lz-analyze b interval 1 minmoves 5");
-    // Expect to see at least 5 move priors
-    expect_regex(result.first, "info.*?(prior\\s+\\d+\\s+.*?){5,}.*");
+    // Expect to see at least 5 move priors. Count simple matches instead of
+    // one nested lazy regex: MSVC's recursive std::regex overflows the stack
+    // on that pattern with long output.
+    expect_regex(result.first, "info");
+    const auto prior_re = std::regex("prior\\s+\\d+");
+    const auto priors = std::distance(
+        std::sregex_iterator(result.first.begin(), result.first.end(), prior_re),
+        std::sregex_iterator());
+    EXPECT_GE(priors, 5) << result.first;
 }
