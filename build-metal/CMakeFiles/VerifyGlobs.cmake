@@ -53,9 +53,9 @@ if(NOT "${NEW_GLOB}" STREQUAL "${OLD_GLOB}")
 endif()
 
 # LEELAZ_METAL_SOURCES at CMakeLists.txt:79 (file)
-file(GLOB NEW_GLOB LIST_DIRECTORIES true "/Users/neolinux/dev/leela-zero/src/metal/*.mm")
+file(GLOB NEW_GLOB LIST_DIRECTORIES true "/Users/neolinux/dev/leela-zero/src/metal/*.cpp")
 set(OLD_GLOB
-  "/Users/neolinux/dev/leela-zero/src/metal/MetalContext.mm"
+  "/Users/neolinux/dev/leela-zero/src/metal/MetalPipe.cpp"
   )
 if(NOT "${NEW_GLOB}" STREQUAL "${OLD_GLOB}")
   message("-- GLOB mismatch!")
@@ -78,7 +78,34 @@ if(NOT "${NEW_GLOB}" STREQUAL "${OLD_GLOB}")
   file(TOUCH_NOCREATE "/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/cmake.verify_globs")
 endif()
 
-# TEST_SOURCES at CMakeLists.txt:180 (file)
+# LEELAZ_METAL_SOURCES at CMakeLists.txt:79 (file)
+file(GLOB NEW_GLOB LIST_DIRECTORIES true "/Users/neolinux/dev/leela-zero/src/metal/*.mm")
+set(OLD_GLOB
+  "/Users/neolinux/dev/leela-zero/src/metal/MetalContext.mm"
+  "/Users/neolinux/dev/leela-zero/src/metal/MetalNetwork.mm"
+  )
+if(NOT "${NEW_GLOB}" STREQUAL "${OLD_GLOB}")
+  message("-- GLOB mismatch!")
+  set(NEW_ONLY ${NEW_GLOB})
+  set(OLD_ONLY ${OLD_GLOB})
+  list(REMOVE_ITEM NEW_ONLY ${OLD_GLOB})
+  list(REMOVE_ITEM OLD_ONLY ${NEW_GLOB})
+  if(NEW_ONLY)
+    message("The following files were added:")
+    foreach(VAR_FILE IN LISTS NEW_ONLY)
+      message("  +${VAR_FILE}")
+    endforeach()
+  endif()
+  if(OLD_ONLY)
+    message("The following files were removed:")
+    foreach(VAR_FILE IN LISTS OLD_ONLY)
+      message("  -${VAR_FILE}")
+    endforeach()
+  endif()
+  file(TOUCH_NOCREATE "/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/cmake.verify_globs")
+endif()
+
+# TEST_SOURCES at CMakeLists.txt:183 (file)
 file(GLOB NEW_GLOB LIST_DIRECTORIES true "/Users/neolinux/dev/leela-zero/src/tests/*.cpp")
 set(OLD_GLOB
   "/Users/neolinux/dev/leela-zero/src/tests/gtests.cpp"

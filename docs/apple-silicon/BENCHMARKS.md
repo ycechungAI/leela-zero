@@ -98,6 +98,26 @@ Thread-count sweep (4 runs each, medians; Accelerate BLAS):
   3,451 vs 3,299 (medians of 5). Small gain, within noise; kept to match the
   OpenBLAS/MKL behaviour of one BLAS thread per search thread.
 
+## Phase 2 step 2.3: Metal (MPSGraph, fp32, batch 1, synchronous) (2026-10-03)
+
+Random nets, M4, `--benchmark`, 3 runs each, n/s. The Metal pipe evaluates one
+position at a time behind a mutex; batching and asynchronous submission arrive
+in step 2.4.
+
+| Network | Threads | CPU (Accelerate) | Metal | Metal / CPU |
+|---------|--------:|-----------------:|------:|------------:|
+| random 15b×192 | 1 | 72 | 179 | **2.5×** |
+| random 15b×192 | 10 | 228 | 193 | 0.85× |
+| random 6b×64 | 1 | 899 | 1,326 | 1.5× |
+| random 6b×64 | 10 | 4,433 | 1,433 | 0.32× |
+
+- Even unbatched and single-threaded, the GPU beats one CPU thread, by 2.5× on
+  the big net. With 10 search threads the CPU scales out while Metal stays
+  flat (the mutex serializes it), so the CPU wins until 2.4 batches
+  evaluations across threads.
+- Metal's `-t 1` figure is the latency-bound number: one dispatch per
+  evaluation. That is the floor 2.4 has to improve on with batching.
+
 ## Numerical parity
 
 | Gate | Compared | Network / positions | max abs Δ prior | max abs Δ winrate | Result |
@@ -107,6 +127,9 @@ Thread-count sweep (4 runs each, medians; Accelerate BLAS):
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 15b×192, 3 positions × 8 symmetries | 3.7e-7 | 0 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 6b×64, same | 2.8e-9 | 1.2e-7 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized (Accelerate) vs Eigen 3.4 | random 15b×192, same | 3.4e-7 | 0 | PASS (tol 1e-5) |
+| G2 | Metal fp32 vs CPU (`--cpu-only`) | random 6b×64, 3 positions × 8 symmetries | 3.0e-9 | 1.8e-7 | PASS (tol 1e-4) |
+| G2 | Metal fp32 vs CPU (`--cpu-only`) | random 15b×192, same | 3.1e-7 | 0 | PASS (tol 1e-4) |
+| — | Metal vs CPU raw head outputs (unit test, C=8, 2 blocks, non-trivial BN) | 4 random inputs | 6.0e-7 | — | PASS (tol 1e-4; batch 4 = batch 1 exactly) |
 | G1 | 1.4a scalar fallback (MSVC path) vs pre-change | random 6b×64, 2 positions × 8 symmetries | 3.0e-9 | 6.0e-8 | PASS (tol 1e-5) |
 
 ## Official baseline (to do)

@@ -76,7 +76,8 @@ file(GLOB LEELAZ_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*.cpp")
 list(REMOVE_ITEM LEELAZ_SOURCES "${PROJECT_SOURCE_DIR}/src/Leela.cpp")
 
 if(USE_METAL)
-  file(GLOB LEELAZ_METAL_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/metal/*.mm")
+  file(GLOB LEELAZ_METAL_SOURCES CONFIGURE_DEPENDS
+       "${PROJECT_SOURCE_DIR}/src/metal/*.mm" "${PROJECT_SOURCE_DIR}/src/metal/*.cpp")
   list(APPEND LEELAZ_SOURCES ${LEELAZ_METAL_SOURCES})
 endif()
 
@@ -104,7 +105,9 @@ endif()
 if(USE_METAL)
   target_include_directories(leelaz_core PUBLIC "${PROJECT_SOURCE_DIR}/src/metal")
   target_compile_options(leelaz_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
-  target_link_libraries(leelaz_core PUBLIC "-framework Metal" "-framework Foundation")
+  target_link_libraries(leelaz_core PUBLIC
+    "-framework Metal" "-framework Foundation"
+    "-framework MetalPerformanceShaders" "-framework MetalPerformanceShadersGraph")
 endif()
 if(USE_BLAS)
   if(APPLE)

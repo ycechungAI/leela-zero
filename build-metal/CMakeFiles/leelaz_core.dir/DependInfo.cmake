@@ -33,7 +33,9 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/Users/neolinux/dev/leela-zero/src/UCTSearch.cpp" "CMakeFiles/leelaz_core.dir/src/UCTSearch.cpp.o" "gcc" "CMakeFiles/leelaz_core.dir/src/UCTSearch.cpp.o.d"
   "/Users/neolinux/dev/leela-zero/src/Utils.cpp" "CMakeFiles/leelaz_core.dir/src/Utils.cpp.o" "gcc" "CMakeFiles/leelaz_core.dir/src/Utils.cpp.o.d"
   "/Users/neolinux/dev/leela-zero/src/Zobrist.cpp" "CMakeFiles/leelaz_core.dir/src/Zobrist.cpp.o" "gcc" "CMakeFiles/leelaz_core.dir/src/Zobrist.cpp.o.d"
+  "/Users/neolinux/dev/leela-zero/src/metal/MetalPipe.cpp" "CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o" "gcc" "CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o.d"
   "/Users/neolinux/dev/leela-zero/src/metal/MetalContext.mm" "CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.o" "gcc" "CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.o.d"
+  "/Users/neolinux/dev/leela-zero/src/metal/MetalNetwork.mm" "CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o" "gcc" "CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.

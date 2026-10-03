@@ -361,7 +361,7 @@ void GTP::setup_default_parameters() {
     cfg_logfile_handle = nullptr;
     cfg_quiet = false;
     cfg_benchmark = false;
-#ifdef USE_CPU_ONLY
+#if defined(USE_CPU_ONLY) && !defined(USE_METAL)
     cfg_cpu_only = true;
 #else
     cfg_cpu_only = false;

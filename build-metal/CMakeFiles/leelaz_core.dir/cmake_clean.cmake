@@ -51,6 +51,10 @@ file(REMOVE_RECURSE
   "CMakeFiles/leelaz_core.dir/src/Zobrist.cpp.o.d"
   "CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.o"
   "CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.o.d"
+  "CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o"
+  "CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o.d"
+  "CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o"
+  "CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o.d"
 )
 
 # Per-language clean rules from dependency scanning.

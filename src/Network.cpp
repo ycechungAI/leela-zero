@@ -55,6 +55,9 @@
 #endif
 #include "CPUPipe.h"
 #include "Network.h"
+#ifdef USE_METAL
+#include "MetalPipe.h"
+#endif
 #include "zlib.h"
 #ifdef USE_OPENCL
 #include "OpenCLScheduler.h"
@@ -571,7 +574,24 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
         m_fwd_weights->m_conv_pol_b[i] = 0.0f;
     }
 
-#ifdef USE_OPENCL
+#if defined(USE_METAL)
+    if (cfg_cpu_only) {
+        myprintf("Initializing CPU-only evaluation.\n");
+        m_forward = init_net(channels, std::make_unique<CPUPipe>());
+    } else {
+        try {
+            auto pipe = std::make_unique<MetalPipe>();
+            pipe->initialize(channels);
+            myprintf("%s.\n", pipe->describe().c_str());
+            pipe->push_weights(WINOGRAD_ALPHA, INPUT_CHANNELS, channels,
+                               m_fwd_weights);
+            m_forward = std::move(pipe);
+        } catch (const std::exception& e) {
+            myprintf("%s; falling back to the CPU.\n", e.what());
+            m_forward = init_net(channels, std::make_unique<CPUPipe>());
+        }
+    }
+#elif defined(USE_OPENCL)
     if (cfg_cpu_only) {
         myprintf("Initializing CPU-only evaluation.\n");
         m_forward = init_net(channels, std::make_unique<CPUPipe>());

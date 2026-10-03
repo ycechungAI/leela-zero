@@ -436,6 +436,34 @@ CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling OBJCXX source to assembly CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.s"
 	/usr/bin/clang++ $(OBJCXX_DEFINES) $(OBJCXX_INCLUDES) $(OBJCXX_FLAGS) -S /Users/neolinux/dev/leela-zero/src/metal/MetalContext.mm -o CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.s
 
+CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o: CMakeFiles/leelaz_core.dir/flags.make
+CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o: /Users/neolinux/dev/leela-zero/src/metal/MetalNetwork.mm
+CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o: CMakeFiles/leelaz_core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Building OBJCXX object CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o"
+	/usr/bin/clang++ $(OBJCXX_DEFINES) $(OBJCXX_INCLUDES) -x objective-c++ $(OBJCXX_FLAGS) -MD -MT CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o -MF CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o.d -o CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o -c /Users/neolinux/dev/leela-zero/src/metal/MetalNetwork.mm
+
+CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing OBJCXX source to CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.i"
+	/usr/bin/clang++ $(OBJCXX_DEFINES) $(OBJCXX_INCLUDES) $(OBJCXX_FLAGS) -E /Users/neolinux/dev/leela-zero/src/metal/MetalNetwork.mm > CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.i
+
+CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling OBJCXX source to assembly CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.s"
+	/usr/bin/clang++ $(OBJCXX_DEFINES) $(OBJCXX_INCLUDES) $(OBJCXX_FLAGS) -S /Users/neolinux/dev/leela-zero/src/metal/MetalNetwork.mm -o CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.s
+
+CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o: CMakeFiles/leelaz_core.dir/flags.make
+CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o: /Users/neolinux/dev/leela-zero/src/metal/MetalPipe.cpp
+CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o: CMakeFiles/leelaz_core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles --progress-num=$(CMAKE_PROGRESS_28) "Building CXX object CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o -MF CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o.d -o CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o -c /Users/neolinux/dev/leela-zero/src/metal/MetalPipe.cpp
+
+CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/neolinux/dev/leela-zero/src/metal/MetalPipe.cpp > CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.i
+
+CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/neolinux/dev/leela-zero/src/metal/MetalPipe.cpp -o CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.s
+
 leelaz_core: CMakeFiles/leelaz_core.dir/src/CPUPipe.cpp.o
 leelaz_core: CMakeFiles/leelaz_core.dir/src/FastBoard.cpp.o
 leelaz_core: CMakeFiles/leelaz_core.dir/src/FastState.cpp.o
@@ -462,6 +490,8 @@ leelaz_core: CMakeFiles/leelaz_core.dir/src/UCTSearch.cpp.o
 leelaz_core: CMakeFiles/leelaz_core.dir/src/Utils.cpp.o
 leelaz_core: CMakeFiles/leelaz_core.dir/src/Zobrist.cpp.o
 leelaz_core: CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.o
+leelaz_core: CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o
+leelaz_core: CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o
 leelaz_core: CMakeFiles/leelaz_core.dir/build.make
 .PHONY : leelaz_core
 

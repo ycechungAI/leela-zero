@@ -52,7 +52,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
    also fixes a spurious-wakeup race). Not sent upstream yet.
 2. ✅ `MetalContext`: device, queue, runtime MSL compile, and the `USE_METAL` CMake option
    (`cmake --preset macos-metal`).
-3. `MetalNetwork` via MPSGraph, fp32, fixed batch sizes, with BN folded into conv.
+3. ✅ `MetalNetwork` via MPSGraph, fp32, fixed batch sizes, with BN folded into conv
+   (G2 passes; synchronous batch-1 `MetalPipe` is a stopgap until step 4).
 4. `MetalScheduler`: shared-buffer slot ring, triple buffering, completion wakeups.
 5. Gate G2 (fp32). Then add fp16 + `--precision auto` + `USE_METAL_SELFCHECK`.
 6. `--backend` flag, plus Metal as the default on macOS.

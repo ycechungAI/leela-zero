@@ -117,7 +117,9 @@ leelaz_EXTERNAL_OBJECTS = \
 "/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/leelaz_core.dir/src/UCTSearch.cpp.o" \
 "/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/leelaz_core.dir/src/Utils.cpp.o" \
 "/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/leelaz_core.dir/src/Zobrist.cpp.o" \
-"/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.o"
+"/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.o" \
+"/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o" \
+"/Users/neolinux/dev/leela-zero/build-metal/CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o"
 
 leelaz: CMakeFiles/leelaz.dir/src/Leela.cpp.o
 leelaz: CMakeFiles/leelaz_core.dir/src/CPUPipe.cpp.o
@@ -146,6 +148,8 @@ leelaz: CMakeFiles/leelaz_core.dir/src/UCTSearch.cpp.o
 leelaz: CMakeFiles/leelaz_core.dir/src/Utils.cpp.o
 leelaz: CMakeFiles/leelaz_core.dir/src/Zobrist.cpp.o
 leelaz: CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.o
+leelaz: CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o
+leelaz: CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o
 leelaz: CMakeFiles/leelaz.dir/build.make
 leelaz: /opt/homebrew/lib/libboost_program_options.dylib
 leelaz: /opt/homebrew/lib/libboost_container.dylib

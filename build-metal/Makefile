@@ -974,6 +974,38 @@ src/metal/MetalContext.mm.o:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/leelaz_core.dir/build.make CMakeFiles/leelaz_core.dir/src/metal/MetalContext.mm.o
 .PHONY : src/metal/MetalContext.mm.o
 
+src/metal/MetalNetwork.o: src/metal/MetalNetwork.mm.o
+.PHONY : src/metal/MetalNetwork.o
+
+# target to build an object file
+src/metal/MetalNetwork.mm.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/leelaz_core.dir/build.make CMakeFiles/leelaz_core.dir/src/metal/MetalNetwork.mm.o
+.PHONY : src/metal/MetalNetwork.mm.o
+
+src/metal/MetalPipe.o: src/metal/MetalPipe.cpp.o
+.PHONY : src/metal/MetalPipe.o
+
+# target to build an object file
+src/metal/MetalPipe.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/leelaz_core.dir/build.make CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.o
+.PHONY : src/metal/MetalPipe.cpp.o
+
+src/metal/MetalPipe.i: src/metal/MetalPipe.cpp.i
+.PHONY : src/metal/MetalPipe.i
+
+# target to preprocess a source file
+src/metal/MetalPipe.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/leelaz_core.dir/build.make CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.i
+.PHONY : src/metal/MetalPipe.cpp.i
+
+src/metal/MetalPipe.s: src/metal/MetalPipe.cpp.s
+.PHONY : src/metal/MetalPipe.s
+
+# target to generate assembly for a file
+src/metal/MetalPipe.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/leelaz_core.dir/build.make CMakeFiles/leelaz_core.dir/src/metal/MetalPipe.cpp.s
+.PHONY : src/metal/MetalPipe.cpp.s
+
 src/tests/gtests.o: src/tests/gtests.cpp.o
 .PHONY : src/tests/gtests.o
 
@@ -1128,6 +1160,10 @@ help:
 	@echo "... src/Zobrist.i"
 	@echo "... src/Zobrist.s"
 	@echo "... src/metal/MetalContext.o"
+	@echo "... src/metal/MetalNetwork.o"
+	@echo "... src/metal/MetalPipe.o"
+	@echo "... src/metal/MetalPipe.i"
+	@echo "... src/metal/MetalPipe.s"
 	@echo "... src/tests/gtests.o"
 	@echo "... src/tests/gtests.i"
 	@echo "... src/tests/gtests.s"

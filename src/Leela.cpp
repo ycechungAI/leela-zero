@@ -79,7 +79,7 @@ static void calculate_thread_count_cpu(
     }
 }
 
-#ifdef USE_OPENCL
+#if defined(USE_OPENCL) && !defined(USE_METAL)
 static void calculate_thread_count_gpu(
     boost::program_options::variables_map& vm) {
     auto cfg_max_threads = size_t{MAX_CPUS};
@@ -168,8 +168,8 @@ static void parse_commandline(const int argc, const char* const argv[]) {
         ("noponder", "Disable thinking on opponent's time.")
         ("benchmark", "Test network and exit. Default args:\n-v3200 --noponder "
                       "-m0 -t1 -s1.")
-#ifndef USE_CPU_ONLY
-        ("cpu-only", "Use CPU-only implementation and do not use OpenCL device(s).")
+#if !defined(USE_CPU_ONLY) || defined(USE_METAL)
+        ("cpu-only", "Use CPU-only implementation and do not use the GPU.")
 #endif
         ;
 #ifdef USE_OPENCL
@@ -360,10 +360,18 @@ static void parse_commandline(const int argc, const char* const argv[]) {
     if (vm.count("cpu-only")) {
         cfg_cpu_only = true;
     }
+#elif defined(USE_METAL)
+    if (vm.count("cpu-only")) {
+        cfg_cpu_only = true;
+    }
 #else
     cfg_cpu_only = true;
 #endif
 
+#ifdef USE_METAL
+    // The Metal pipe is synchronous (step 2.3), so threads scale like CPU.
+    calculate_thread_count_cpu(vm);
+#else
     if (cfg_cpu_only) {
         calculate_thread_count_cpu(vm);
     } else {
@@ -372,6 +380,7 @@ static void parse_commandline(const int argc, const char* const argv[]) {
         myprintf("Using OpenCL batch size of %d\n", cfg_batch_size);
 #endif
     }
+#endif
     if (Platform::num_eff_cores() > 0) {
         myprintf("Using %d thread(s) (%d performance + %d efficiency cores).\n",
                  cfg_num_threads, Platform::num_perf_cores(),

@@ -29,6 +29,7 @@
 #include "config.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <iostream>
@@ -397,7 +398,11 @@ TEST(PlatformTest, CoreCountsAreSane) {
 }
 
 #ifdef USE_METAL
+#include <random>
+
+#include "CPUPipe.h"
 #include "MetalContext.h"
+#include "MetalNetwork.h"
 
 TEST(MetalContextTest, DeviceAndSelfTest) {
     std::string error;
@@ -414,5 +419,94 @@ TEST(MetalContextTest, DeviceAndSelfTest) {
     // A broken shader must fail cleanly with a message, not crash.
     EXPECT_FALSE(ctx->compile_check("kernel void broken( {", error));
     EXPECT_FALSE(error.empty());
+}
+
+// A tiny random network with non-trivial batch norm (non-zero means, scales
+// away from 1), so a folding mistake cannot cancel out.
+static std::shared_ptr<ForwardPipe::ForwardPipeWeights> make_test_weights(
+    const int C, const int blocks, std::mt19937& rng) {
+    auto w = std::make_shared<ForwardPipe::ForwardPipeWeights>();
+    const auto uniform = [&rng](const float lo, const float hi) {
+        return std::uniform_real_distribution<float>(lo, hi)(rng);
+    };
+    const auto fill = [&](const size_t n, const float lo, const float hi) {
+        std::vector<float> v(n);
+        for (auto& x : v) {
+            x = uniform(lo, hi);
+        }
+        return v;
+    };
+    for (auto layer = 0; layer < 1 + 2 * blocks; layer++) {
+        const auto inputs = layer == 0 ? Network::INPUT_CHANNELS : C;
+        const auto amp = std::sqrt(2.0f / (inputs * 9));
+        w->m_conv_weights.push_back(fill(C * inputs * 9, -amp, amp));
+        w->m_conv_biases.push_back(std::vector<float>(C, 0.0f));
+        w->m_batchnorm_means.push_back(fill(C, -0.5f, 0.5f));
+        w->m_batchnorm_stddevs.push_back(fill(C, 0.5f, 2.0f));
+    }
+    const auto amp = std::sqrt(1.0f / C);
+    w->m_conv_pol_w = fill(Network::OUTPUTS_POLICY * C, -amp, amp);
+    w->m_conv_pol_b = std::vector<float>(Network::OUTPUTS_POLICY, 0.0f);
+    w->m_conv_val_w = fill(Network::OUTPUTS_VALUE * C, -amp, amp);
+    w->m_conv_val_b = std::vector<float>(Network::OUTPUTS_VALUE, 0.0f);
+    return w;
+}
+
+TEST(MetalNetworkTest, MatchesCpuAndBatchesConsistently) {
+    constexpr auto C = 8;
+    constexpr auto blocks = 2;
+    constexpr auto N = 4;
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(1234);
+    const auto weights = make_test_weights(C, blocks, rng);
+
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+    MetalNetwork metal(*ctx, C, blocks, *weights);
+
+    CPUPipe cpu;
+    cpu.initialize(C);
+    cpu.push_weights(WINOGRAD_ALPHA, Network::INPUT_CHANNELS, C, weights);
+
+    std::vector<float> in(N * Network::INPUT_CHANNELS * plane);
+    for (auto& x : in) {
+        x = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+    }
+    constexpr auto pol_size = Network::OUTPUTS_POLICY * plane;
+    constexpr auto val_size = Network::OUTPUTS_VALUE * plane;
+    const auto in_size = Network::INPUT_CHANNELS * plane;
+
+    std::vector<float> pol_b(N * pol_size), val_b(N * val_size);
+    metal.forward(in.data(), N, pol_b.data(), val_b.data());
+
+    float worst_cpu = 0.0f, worst_batch = 0.0f, magnitude = 0.0f;
+    for (auto i = 0; i < N; i++) {
+        const std::vector<float> one(in.begin() + i * in_size,
+                                     in.begin() + (i + 1) * in_size);
+        std::vector<float> pol_c(pol_size), val_c(val_size);
+        cpu.forward(one, pol_c, val_c);
+
+        std::vector<float> pol_1(pol_size), val_1(val_size);
+        metal.forward(one.data(), 1, pol_1.data(), val_1.data());
+
+        for (auto j = 0; j < pol_size; j++) {
+            worst_cpu = std::max(worst_cpu, std::abs(pol_1[j] - pol_c[j]));
+            worst_batch = std::max(
+                worst_batch, std::abs(pol_b[i * pol_size + j] - pol_1[j]));
+            magnitude = std::max(magnitude, std::abs(pol_c[j]));
+        }
+        for (auto j = 0; j < val_size; j++) {
+            worst_cpu = std::max(worst_cpu, std::abs(val_1[j] - val_c[j]));
+            worst_batch = std::max(
+                worst_batch, std::abs(val_b[i * val_size + j] - val_1[j]));
+        }
+    }
+    // The outputs must be big enough for the comparison to mean something.
+    EXPECT_GT(magnitude, 0.05f);
+    EXPECT_LE(worst_cpu, 1e-4f) << "Metal vs CPU";
+    EXPECT_LE(worst_batch, 1e-6f) << "batch 4 vs batch 1";
+    std::cout << "Metal vs CPU max diff " << worst_cpu << ", batch vs single "
+              << worst_batch << ", max |output| " << magnitude << std::endl;
 }
 #endif

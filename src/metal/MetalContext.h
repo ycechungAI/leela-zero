@@ -55,9 +55,15 @@ public:
     // buffers (no copies) and verifies the result on the CPU.
     bool self_test(std::string& error) const;
 
+    // Objective-C state (device, queue); defined in MetalContextImpl.h, which
+    // only .mm files may include.
+    struct Impl;
+    const Impl& impl() const {
+        return *m_impl;
+    }
+
 private:
     MetalContext();
-    struct Impl;
     std::unique_ptr<Impl> m_impl;
 };
 

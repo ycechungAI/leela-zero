@@ -17,17 +17,11 @@
 */
 
 #import <Foundation/Foundation.h>
-#import <Metal/Metal.h>
 
-#include "MetalContext.h"
+#include "MetalContextImpl.h"
 
 #include <cmath>
 #include <vector>
-
-struct MetalContext::Impl {
-    id<MTLDevice> device = nil;
-    id<MTLCommandQueue> queue = nil;
-};
 
 namespace {
 
