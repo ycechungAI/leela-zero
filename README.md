@@ -125,6 +125,9 @@ by adding -DUSE_CPU_ONLY=1 to the cmake command line.
 
 ## Example of compiling - macOS
 
+> **Apple Silicon (M1–M4):** see [docs/apple-silicon/BUILD.md](docs/apple-silicon/BUILD.md)
+> for the arm64 build, run, debug and training scripts (`scripts/macos/`).
+
     # Clone github repo
     git clone https://github.com/leela-zero/leela-zero
     cd leela-zero

@@ -12,3 +12,9 @@ leelaz_opencl_tuning
 /build-validation-*
 .vs/
 build/
+/build-opencl/
+/build-debug/
+/build-asan/
+/data/
+/logs/
+.DS_Store
