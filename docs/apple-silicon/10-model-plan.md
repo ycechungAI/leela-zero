@@ -104,7 +104,7 @@ Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done
 |------|:-------:|:----:|:------:|--------------|--------|-------|
 | 2.1 | S | Opus 5.5 | ✅ | ctest, OpenCL↔CPU parity 1.8e-7, TSan (batching + drain): 0 races | `5a4182f` | Also fixed a spurious-wakeup race in forward() |
 | 2.2 | M | Sonnet 5.5 | ✅ | ctest (new `MetalContextTest` compiles and runs an MSL kernel on the M4 GPU via shared buffers), default build still green | `bce8066` | Pure-C++ header, ObjC++ only in `src/metal/*.mm` (ARC). `USE_METAL` defaults OFF and errors off-Apple |
-| 2.3 | S→M | Opus 5.5 plan → Sonnet 5.5 build | ✅ | 2.3a: G1 diff 0 (exact), OpenCL old/new diff 0, ASan. 2.3b–d: G2 vs CPU 3.1e-7 (15b×192) and 1.8e-7 (6b×64), unit test (6e-7; mutation check confirmed it catches a BN-fold bug), ASan+UBSan with Metal, 4 build combinations | `4732b73` (2.3a), `COMMIT` (2.3b–d) | Plan: [11-plan-2.3-mpsgraph.md](11-plan-2.3-mpsgraph.md). Followed as written, no escalation. Per-batch-size graphs (not symbolic batch), built lazily |
+| 2.3 | S→M | Opus 5.5 plan → Sonnet 5.5 build | ✅ | 2.3a: G1 diff 0 (exact), OpenCL old/new diff 0, ASan. 2.3b–d: G2 vs CPU 3.1e-7 (15b×192) and 1.8e-7 (6b×64), unit test (6e-7; mutation check confirmed it catches a BN-fold bug), ASan+UBSan with Metal, 4 build combinations | `4732b73` (2.3a), `6778cca` (2.3b–d) | Plan: [11-plan-2.3-mpsgraph.md](11-plan-2.3-mpsgraph.md). Followed as written, no escalation. Per-batch-size graphs (not symbolic batch), built lazily |
 | 2.4 | S | | ⬜ | | | |
 | 2.5 | M | | ⬜ | | | |
 | 2.6 | L | | ⬜ | | | |
