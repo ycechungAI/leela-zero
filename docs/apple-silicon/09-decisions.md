@@ -53,9 +53,14 @@
 - **Consequences:** Adds a Python export step and a model cache directory.
   Not a default.
 
-## ADR-005: Keep the engine core at C++14
+## ADR-005: Raise the engine to C++17
 
-- **Status:** Accepted
-- **Decision:** Shared C++ stays C++14, so upstream merges and MSVC builds keep
-  working. Only `src/metal/*.mm` and `src/coreml/*.mm` use C++17/ObjC++, behind
-  pimpl headers.
+- **Status:** Accepted (revised in Phase 0; originally "keep C++14")
+- **Context:** Current Boost (1.92, Homebrew) Spirit X3, used by
+  `Network.cpp` to parse weights, needs C++17. libc++ in C++17 mode also drops
+  `std::binary_function`.
+- **Decision:** Set `CMAKE_CXX_STANDARD 17` everywhere. Replace the removed or
+  deprecated constructs (`std::binary_function`, `std::result_of` →
+  `std::invoke_result_t`). GCC 7+, Clang 5+ and MSVC 2017+ all support it.
+- **Consequences:** The VS2015 AppVeyor image can no longer build. ObjC++ files
+  in `src/metal` use the same standard.

@@ -3,7 +3,7 @@
 ## 1. Big picture
 
 ```
-                         ┌───────────────────────── leelaz (C++14 core / ObjC++17) ──────────┐
+                         ┌───────────────────────── leelaz (C++17 / ObjC++) ─────────────────┐
  GTP / autogtp  ───────► │ UCTSearch threads ──► Network ──► NNCache                          │
                          │                           │                                         │
                          │                           ▼                                         │

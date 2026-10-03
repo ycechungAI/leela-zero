@@ -12,7 +12,7 @@ The upstream build doesn't configure on the M4 (blockers B1–B5 in 00-repo-over
 
 | Change | Detail |
 |--------|--------|
-| Minimum version | `cmake_minimum_required(VERSION 3.16...3.31)`. The range syntax keeps CMake 4.x happy and still runs on Ubuntu 20.04 |
+| Minimum version | `cmake_minimum_required(VERSION 3.13...3.31)` (done in Phase 0). The range syntax keeps CMake 4.x happy and still runs on Ubuntu 20.04 |
 | Options | Add `option(USE_METAL ...)`, `option(USE_ACCELERATE ...)` and `option(USE_COREML ...)`. Change the default of `USE_OPENCL` to OFF on APPLE and ON elsewhere (today OpenCL is implied unless `USE_CPU_ONLY` is set) |
 | OpenCL | `find_package(OpenCL)` only if `USE_OPENCL`. Keep `USE_CPU_ONLY` as an alias that sets `USE_OPENCL=OFF USE_METAL=OFF`, for backward compatibility |
 | Accelerate | Replace the hard-coded header path with `find_library(ACCELERATE_FRAMEWORK Accelerate)` and `target_link_libraries(... ${ACCELERATE_FRAMEWORK})`, plus `target_compile_definitions(ACCELERATE_NEW_LAPACK ACCELERATE_LAPACK_ILP64=0)` |

@@ -12,12 +12,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Leela Zero.  If not, see <http://www.gnu.org/licenses/>.
 
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.13...3.31)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
-include(GNUInstallDirs)
 
 project(leelaz)
+include(GNUInstallDirs)
 add_subdirectory(gtest EXCLUDE_FROM_ALL) # We don't want to install gtest, exclude it from `all`
 
 # Required Packages
@@ -26,7 +26,9 @@ set(Boost_USE_MULTITHREADED ON)
 find_package(Boost 1.58.0 REQUIRED program_options filesystem)
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
-find_package(OpenCL REQUIRED)
+if(NOT USE_CPU_ONLY)
+  find_package(OpenCL REQUIRED)
+endif()
 # We need OpenBLAS for now, because we make some specific
 # calls. Ideally we'd use OpenBLAS is possible and fall back to
 # not doing those calls if it's not present.
@@ -44,12 +46,16 @@ if(USE_BLAS)
     /usr/include/x86_64-linux-gnu
     $ENV{BLAS_HOME}/include)
     add_definitions(-DUSE_BLAS)
+    if(APPLE)
+      # Use the current Accelerate CBLAS interface (macOS 13.3+).
+      add_definitions(-DACCELERATE_NEW_LAPACK)
+    endif()
 else()
 message(STATUS "Using built-in matrix library.")
 endif()
-find_package(Qt5Core)
+find_package(Qt5Core QUIET)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED on)
 
 # See if we can set optimization flags as expected.
@@ -71,8 +77,10 @@ endif(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
 
 if(GccSpecificFlags)
   set(GCC_COMPILE_FLAGS "-Wall -Wextra -ffast-math -flto -march=native")
-  set(GCC_DISABLED_WARNING_COMPILE_FLAGS "-Wno-ignored-attributes -Wno-maybe-uninitialized \
-      -Wno-mismatched-tags")
+  set(GCC_DISABLED_WARNING_COMPILE_FLAGS "-Wno-ignored-attributes -Wno-mismatched-tags")
+  if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+    set(GCC_DISABLED_WARNING_COMPILE_FLAGS "${GCC_DISABLED_WARNING_COMPILE_FLAGS} -Wno-maybe-uninitialized")
+  endif()
   set(GCC_FLAGS "${GCC_COMPILE_FLAGS} ${GCC_DISABLED_WARNING_COMPILE_FLAGS}")
   set(CMAKE_CXX_FLAGS_DEBUG "${GCC_FLAGS} -g -Og")
   set(CMAKE_CXX_FLAGS_RELEASE "${GCC_FLAGS} -g -O3 -DNDEBUG")
@@ -97,10 +105,6 @@ include_directories(${ZLIB_INCLUDE_DIRS})
 if((UNIX AND NOT APPLE) OR WIN32)
     include_directories(${BLAS_INCLUDE_DIRS})
 endif()
-if(APPLE)
-    include_directories("/System/Library/Frameworks/Accelerate.framework/Versions/Current/Headers")
-endif()
-
 set(leelaz_MAIN "${SrcPath}/Leela.cpp")
 file(GLOB leelaz_SRC "${SrcPath}/*.cpp")
 list(REMOVE_ITEM leelaz_SRC ${leelaz_MAIN})

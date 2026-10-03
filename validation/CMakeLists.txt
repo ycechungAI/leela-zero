@@ -1,5 +1,5 @@
 
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.13...3.31)
 
 add_executable(validation
         main.cpp ../autogtp/Game.cpp SPRT.cpp Validation.cpp Results.cpp

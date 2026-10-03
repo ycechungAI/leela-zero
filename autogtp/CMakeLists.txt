@@ -1,5 +1,5 @@
 
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.13...3.31)
 
 add_executable(autogtp
 	Game.h Order.h Management.h Worker.h Job.h Result.h Console.h
