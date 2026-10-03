@@ -33,8 +33,11 @@ constexpr auto POL_SIZE = Network::OUTPUTS_POLICY * PLANE;
 constexpr auto VAL_SIZE = Network::OUTPUTS_VALUE * PLANE;
 } // namespace
 
-MetalScheduler::MetalScheduler(const int max_batch, const int workers)
-    : m_max_batch(std::max(1, max_batch)), m_workers(std::max(1, workers)) {}
+MetalScheduler::MetalScheduler(const int max_batch, const int workers,
+                               const MetalPrecision precision)
+    : m_max_batch(std::max(1, max_batch)),
+      m_workers(std::max(1, workers)),
+      m_precision(precision) {}
 
 MetalScheduler::~MetalScheduler() {
     m_queue.shutdown();
@@ -62,7 +65,7 @@ void MetalScheduler::push_weights(
         static_cast<int>((weights->m_conv_weights.size() - 1) / 2);
     m_network = std::make_unique<MetalNetwork>(
         *m_context, static_cast<int>(outputs), blocks, *weights,
-        std::vector<int>{1, m_max_batch});
+        std::vector<int>{1, m_max_batch}, m_precision);
     for (auto i = 0; i < m_workers; i++) {
         m_threads.emplace_back(&MetalScheduler::worker, this);
     }
@@ -86,8 +89,13 @@ void MetalScheduler::resume() {
     m_queue.resume();
 }
 
+double MetalScheduler::benchmark(const int runs) const {
+    return m_network->benchmark(m_max_batch, runs, m_workers);
+}
+
 std::string MetalScheduler::describe() const {
-    return m_context->describe() + ", MPSGraph, fp32, batch "
+    return m_context->describe() + ", MPSGraph, "
+           + (m_precision == MetalPrecision::Half ? "fp16" : "fp32") + ", batch "
            + std::to_string(m_max_batch) + ", " + std::to_string(m_workers)
            + " workers";
 }

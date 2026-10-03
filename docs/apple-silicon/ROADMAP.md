@@ -56,7 +56,9 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
    (G2 passes; synchronous batch-1 `MetalPipe` is a stopgap until step 4).
 4. ✅ `MetalScheduler`: worker-owned shared-buffer slots, 2 batches in flight,
    completion wakeups (ADR-007). 1.65× the CPU on random 15b×192.
-5. Gate G2 (fp32). Then add fp16 + `--precision auto` + `USE_METAL_SELFCHECK`.
+5. ✅ Gate G2 (fp32), then fp16 + `--precision auto` + `USE_METAL_SELFCHECK`
+   (fp16 +11% on 15b×192; Neural Engine placement ~2× more, see ADR-004
+   addendum, follow-up needed).
 6. `--backend` flag, plus Metal as the default on macOS.
 7. Autotune of batch size and precision, with a persisted cache.
 8. Optional 2b: `forward_into` zero-staging input path.

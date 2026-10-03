@@ -52,6 +52,18 @@
   runs.
 - **Consequences:** Adds a Python export step and a model cache directory.
   Not a default.
+- **Addendum (2026-10-03, step 2.5):** MPSGraph can reach the ANE without
+  Core ML. Its default optimization level adds a placement pass that ran the
+  fp16 tower on the Neural Engine in our experiments: about 760 n/s against
+  about 400 for fp16 on the GPU on a random 15b×192 net (BENCHMARKS.md). Three
+  problems keep it off for now, so `MetalNetwork` compiles at level 0
+  (GPU only): the first run on a never-seen network compiled for **325 s**
+  (cached by the OS afterwards: 2.7 s); MPSGraph prints `error: Incompatible
+  element type for ANE` lines to **stdout**, which corrupts GTP; and accuracy
+  has not been checked on a real network (the 6b×64 case showed no gain, as it
+  is CPU-bound). A follow-up should add an opt-in flag with a startup warm-up
+  that explains the wait, stdout protection around the compile, and the G2
+  fp16 gate on real networks. This may make `CoreMLPipe` unnecessary.
 
 ## ADR-005: Raise the engine to C++17
 

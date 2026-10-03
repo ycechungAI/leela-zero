@@ -99,13 +99,15 @@ extern bool cfg_dumbpass;
 #ifdef USE_OPENCL
 extern std::vector<int> cfg_gpus;
 extern bool cfg_sgemm_exhaustive;
+#endif
+#if defined(USE_OPENCL) || defined(USE_METAL)
 extern bool cfg_tune_only;
-#ifdef USE_HALF
+#endif
+#if defined(USE_HALF) || defined(USE_METAL)
 enum class precision_t {
     AUTO, SINGLE, HALF
 };
 extern precision_t cfg_precision;
-#endif
 #endif
 extern float cfg_puct;
 extern float cfg_logpuct;

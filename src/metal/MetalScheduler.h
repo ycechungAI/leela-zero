@@ -45,7 +45,8 @@ public:
     // measured no faster on the M4 (BENCHMARKS.md, step 2.4).
     static constexpr int DEFAULT_WORKERS = 2;
 
-    explicit MetalScheduler(int max_batch, int workers = DEFAULT_WORKERS);
+    explicit MetalScheduler(int max_batch, int workers = DEFAULT_WORKERS,
+                            MetalPrecision precision = MetalPrecision::Single);
     ~MetalScheduler() override;
 
     // Throws std::runtime_error if Metal is unavailable.
@@ -63,11 +64,17 @@ public:
 
     std::string describe() const;
 
+    // GPU-only throughput in evaluations per second at the full batch size
+    // with one stream per worker, measured on `runs` batches each. Call while
+    // no search is running.
+    double benchmark(int runs) const;
+
 private:
     void worker();
 
     const int m_max_batch;
     const int m_workers;
+    const MetalPrecision m_precision;
     std::unique_ptr<MetalContext> m_context;
     std::unique_ptr<MetalNetwork> m_network;
     BatchQueue m_queue;

@@ -177,27 +177,23 @@ static void parse_commandline(const int argc, const char* const argv[]) {
         ("cpu-only", "Use CPU-only implementation and do not use the GPU.")
 #endif
         ;
-#ifdef USE_OPENCL
-    po::options_description gpu_desc("OpenCL device options");
+#if defined(USE_OPENCL) || defined(USE_METAL)
+    po::options_description gpu_desc("GPU options");
     gpu_desc.add_options()
+#ifdef USE_OPENCL
         ("gpu", po::value<std::vector<int>>(),
                 "ID of the OpenCL device(s) to use (disables autodetection).")
         ("full-tuner", "Try harder to find an optimal OpenCL tuning.")
-        ("tune-only", "Tune OpenCL only and then exit.")
+#endif
+        ("tune-only", "Tune the GPU backend and then exit.")
         ("batchsize", po::value<unsigned int>()->default_value(0),
                       "Max batch size.  Select 0 to let leela-zero pick a reasonable default.")
-#ifdef USE_HALF
+#if defined(USE_HALF) || defined(USE_METAL)
         ("precision", po::value<std::string>(),
                       "Floating-point precision (single/half/auto).\n"
                       "Default is to auto which automatically determines which one to use.")
 #endif
         ;
-#endif
-#if defined(USE_METAL) && !defined(USE_OPENCL)
-    po::options_description gpu_desc("Metal options");
-    gpu_desc.add_options()
-        ("batchsize", po::value<unsigned int>()->default_value(0),
-                      "Max batch size.  Select 0 to let leela-zero pick a reasonable default.");
 #endif
     po::options_description selfplay_desc("Self-play options");
     selfplay_desc.add_options()
@@ -328,24 +324,11 @@ static void parse_commandline(const int argc, const char* const argv[]) {
         cfg_gtp_mode = true;
     }
 
-#ifdef USE_OPENCL
-    if (vm.count("gpu")) {
-        cfg_gpus = vm["gpu"].as<std::vector<int>>();
-    }
-
-    if (vm.count("full-tuner")) {
-        cfg_sgemm_exhaustive = true;
-
-        // --full-tuner auto-implies --tune-only.  The full tuner is so slow
-        // that nobody will wait for it to finish befure running a game.
-        // This simply prevents some edge cases from confusing other people.
-        cfg_tune_only = true;
-    }
-
+#if defined(USE_OPENCL) || defined(USE_METAL)
     if (vm.count("tune-only")) {
         cfg_tune_only = true;
     }
-#ifdef USE_HALF
+#if defined(USE_HALF) || defined(USE_METAL)
     if (vm.count("precision")) {
         auto precision = vm["precision"].as<std::string>();
         if ("single" == precision) {
@@ -359,6 +342,21 @@ static void parse_commandline(const int argc, const char* const argv[]) {
             exit(EXIT_FAILURE);
         }
     }
+#endif
+#ifdef USE_OPENCL
+    if (vm.count("gpu")) {
+        cfg_gpus = vm["gpu"].as<std::vector<int>>();
+    }
+
+    if (vm.count("full-tuner")) {
+        cfg_sgemm_exhaustive = true;
+
+        // --full-tuner auto-implies --tune-only.  The full tuner is so slow
+        // that nobody will wait for it to finish befure running a game.
+        // This simply prevents some edge cases from confusing other people.
+        cfg_tune_only = true;
+    }
+#ifdef USE_HALF
     if (cfg_precision == precision_t::AUTO) {
         // Auto precision is not supported for full tuner cases.
         if (cfg_sgemm_exhaustive) {
@@ -368,10 +366,9 @@ static void parse_commandline(const int argc, const char* const argv[]) {
         }
     }
 #endif
-    if (vm.count("cpu-only")) {
-        cfg_cpu_only = true;
-    }
-#elif defined(USE_METAL)
+#endif
+#endif
+#if !defined(USE_CPU_ONLY) || defined(USE_METAL)
     if (vm.count("cpu-only")) {
         cfg_cpu_only = true;
     }

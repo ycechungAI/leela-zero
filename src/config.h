@@ -133,10 +133,12 @@ static constexpr auto MAX_CPUS = 256;
 #include "half/half.hpp"
 #endif
 
-#ifdef USE_OPENCL
-// If OpenCL are fully usable, then check the OpenCL against CPU
-// implementation with some probability.
-#define USE_OPENCL_SELFCHECK
+#if defined(USE_OPENCL) || defined(USE_METAL_SELFCHECK)
+// If a GPU backend is fully usable, then check it against the CPU
+// implementation with some probability. Always on for OpenCL; opt-in for
+// Metal (CMake option USE_METAL_SELFCHECK), because it keeps a second copy of
+// the weights in memory.
+#define USE_GPU_SELFCHECK
 static constexpr auto SELFCHECK_PROBABILITY = 2000;
 #endif
 

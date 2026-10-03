@@ -496,6 +496,114 @@ void Network::select_precision(const int channels) {
 }
 #endif
 
+#ifdef USE_METAL
+namespace {
+// Positions of increasing move count, for comparing precisions through the
+// whole evaluation (heads, softmax and all).
+std::vector<GameState> metal_check_positions() {
+    constexpr const char* moves[][2] = {
+        {"b", "q16"}, {"w", "d4"},  {"b", "q4"},  {"w", "d16"},
+        {"b", "c14"}, {"w", "r14"}, {"b", "e3"},  {"w", "p3"},
+        {"b", "c6"},  {"w", "r6"},  {"b", "k10"}, {"w", "k4"},
+        {"b", "d10"}, {"w", "q10"}, {"b", "f17"}, {"w", "o17"}};
+    std::vector<GameState> positions;
+    for (const auto count : {0, 1, 2, 4, 8, 16}) {
+        GameState state;
+        state.init_game(BOARD_SIZE, 7.5f);
+        for (auto i = 0; i < count; i++) {
+            state.play_textmove(moves[i][0], moves[i][1]);
+        }
+        positions.push_back(state);
+    }
+    return positions;
+}
+} // namespace
+
+// Builds the Metal pipe for cfg_precision. Auto times both precisions and
+// takes fp16 only if it is at least 5% faster and stays within the N6
+// tolerances (policy 1e-2, value 5e-3) of fp32 on a handful of positions.
+std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
+    const auto make = [this, channels](const MetalPrecision precision) {
+        auto pipe = std::make_unique<MetalScheduler>(
+            cfg_batch_size, MetalScheduler::DEFAULT_WORKERS, precision);
+        pipe->initialize(channels);
+        pipe->push_weights(WINOGRAD_ALPHA, INPUT_CHANNELS, channels,
+                           m_fwd_weights);
+        return pipe;
+    };
+    const auto announce = [](const MetalScheduler& pipe) {
+        myprintf("%s.\n", pipe.describe().c_str());
+    };
+
+    if (cfg_precision != precision_t::AUTO) {
+        auto pipe = make(cfg_precision == precision_t::HALF
+                             ? MetalPrecision::Half
+                             : MetalPrecision::Single);
+        announce(*pipe);
+        return pipe;
+    }
+
+    myprintf("Initializing Metal (autodetecting precision).\n");
+    std::unique_ptr<ForwardPipe> single = make(MetalPrecision::Single);
+    std::unique_ptr<ForwardPipe> half = make(MetalPrecision::Half);
+    const auto speed = [](const std::unique_ptr<ForwardPipe>& pipe) {
+        return static_cast<MetalScheduler&>(*pipe).benchmark(10);
+    };
+    const auto evaluate = [this](std::unique_ptr<ForwardPipe>& pipe) {
+        // get_output_internal() runs on m_forward.
+        m_forward = std::move(pipe);
+        std::vector<Netresult> results;
+        for (const auto& state : metal_check_positions()) {
+            results.push_back(get_output_internal(&state, IDENTITY_SYMMETRY));
+        }
+        pipe = std::move(m_forward);
+        return results;
+    };
+
+    const auto ref = evaluate(single);
+    const auto test = evaluate(half);
+    auto policy_diff = 0.0f, value_diff = 0.0f;
+    for (auto i = size_t{0}; i < ref.size(); i++) {
+        for (auto j = size_t{0}; j < ref[i].policy.size(); j++) {
+            policy_diff = std::max(
+                policy_diff, std::abs(ref[i].policy[j] - test[i].policy[j]));
+        }
+        policy_diff = std::max(
+            policy_diff, std::abs(ref[i].policy_pass - test[i].policy_pass));
+        value_diff =
+            std::max(value_diff, std::abs(ref[i].winrate - test[i].winrate));
+    }
+    // Alternate the measurements and take medians, so that GPU warm-up and
+    // thermal drift do not favor whichever precision runs first.
+    const auto median = [](std::vector<double> v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    };
+    std::vector<double> single_runs, half_runs;
+    for (auto round = 0; round < 5; round++) {
+        single_runs.push_back(speed(single));
+        half_runs.push_back(speed(half));
+    }
+    const auto single_speed = median(single_runs);
+    const auto half_speed = median(half_runs);
+    myprintf("Metal: single %.0f, half %.0f evals/s; half differs by %.1e "
+             "(policy) and %.1e (value).\n",
+             single_speed, half_speed, policy_diff, value_diff);
+
+    const auto accurate = policy_diff <= 1e-2f && value_diff <= 5e-3f;
+    auto& chosen = accurate && half_speed > single_speed * 1.05 ? half : single;
+    if (&chosen == &half) {
+        myprintf("Using Metal half precision (at least 5%% faster than single).\n");
+    } else if (!accurate) {
+        myprintf("Using Metal single precision (half is outside the tolerance).\n");
+    } else {
+        myprintf("Using Metal single precision (less than 5%% slower than half).\n");
+    }
+    announce(static_cast<MetalScheduler&>(*chosen));
+    return std::move(chosen);
+}
+#endif
+
 void Network::initialize(const int playouts, const std::string& weightsfile) {
 #ifdef USE_BLAS
 #ifdef __APPLE__
@@ -580,12 +688,11 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
         m_forward = init_net(channels, std::make_unique<CPUPipe>());
     } else {
         try {
-            auto pipe = std::make_unique<MetalScheduler>(cfg_batch_size);
-            pipe->initialize(channels);
-            myprintf("%s.\n", pipe->describe().c_str());
-            pipe->push_weights(WINOGRAD_ALPHA, INPUT_CHANNELS, channels,
-                               m_fwd_weights);
-            m_forward = std::move(pipe);
+#ifdef USE_GPU_SELFCHECK
+            // CPU reference first, so Metal can be checked against it.
+            m_forward_cpu = init_net(channels, std::make_unique<CPUPipe>());
+#endif
+            m_forward = init_metal(channels);
         } catch (const std::exception& e) {
             myprintf("%s; falling back to the CPU.\n", e.what());
             m_forward = init_net(channels, std::make_unique<CPUPipe>());
@@ -596,7 +703,7 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
         myprintf("Initializing CPU-only evaluation.\n");
         m_forward = init_net(channels, std::make_unique<CPUPipe>());
     } else {
-#ifdef USE_OPENCL_SELFCHECK
+#ifdef USE_GPU_SELFCHECK
         // initialize CPU reference first, so that we can self-check
         // when doing fp16 vs. fp32 detections
         m_forward_cpu = init_net(channels, std::make_unique<CPUPipe>());
@@ -679,7 +786,7 @@ void batchnorm(const size_t channels,
     }
 }
 
-#ifdef USE_OPENCL_SELFCHECK
+#ifdef USE_GPU_SELFCHECK
 void Network::compare_net_outputs(const Netresult& data, const Netresult& ref) {
     // Calculates L2-norm between data and ref.
     constexpr auto max_error = 0.2f;
@@ -699,9 +806,9 @@ void Network::compare_net_outputs(const Netresult& data, const Netresult& ref) {
 
     if (error > max_error || std::isnan(error)) {
         printf(
-            "Error in OpenCL calculation: Update your device's OpenCL drivers "
+            "Error in GPU calculation: Update your device's drivers "
             "or reduce the amount of games played simultaneously.\n");
-        throw std::runtime_error("OpenCL self-check mismatch.");
+        throw std::runtime_error("GPU self-check mismatch.");
     }
 }
 #endif
@@ -794,8 +901,8 @@ Network::Netresult Network::get_output(
         assert(symmetry == -1);
         const auto rand_sym = Random::get_Rng().randfix<NUM_SYMMETRIES>();
         result = get_output_internal(state, rand_sym);
-#ifdef USE_OPENCL_SELFCHECK
-        // Both implementations are available, self-check the OpenCL driver by
+#ifdef USE_GPU_SELFCHECK
+        // Both implementations are available, self-check the GPU backend by
         // running both with a probability of 1/2000.
         // selfcheck is done here because this is the only place NN
         // evaluation is done on actual gameplay.
@@ -835,7 +942,7 @@ Network::Netresult Network::get_output_internal(const GameState* const state,
     const auto input_data = gather_features(state, symmetry);
     std::vector<float> policy_data(OUTPUTS_POLICY * width * height);
     std::vector<float> value_data(OUTPUTS_VALUE * width * height);
-#ifdef USE_OPENCL_SELFCHECK
+#ifdef USE_GPU_SELFCHECK
     if (selfcheck) {
         m_forward_cpu->forward(input_data, policy_data, value_data);
     } else {

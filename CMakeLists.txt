@@ -33,6 +33,7 @@ option(USE_CPU_ONLY  "Build without the OpenCL GPU backend" OFF)
 option(USE_BLAS      "CPU inference via system BLAS (Accelerate on macOS, OpenBLAS elsewhere) instead of Eigen" ${_blas_default})
 option(USE_HALF      "OpenCL: enable half-precision support" OFF)
 option(USE_METAL     "Build the Metal GPU backend (macOS only)" OFF)
+option(USE_METAL_SELFCHECK "Metal: compare ~1 in 2000 evaluations with the CPU backend (keeps a second copy of the weights)" OFF)
 option(LZ_NATIVE_ARCH "Optimize for the build machine's CPU (-march/-mcpu=native). Turn off for redistributable binaries" ON)
 set(LZ_SANITIZE "" CACHE STRING "Sanitizers to enable, e.g. address,undefined (empty = none)")
 option(LZ_BUILD_TESTS "Build the unit tests" ON)
@@ -94,6 +95,7 @@ target_compile_definitions(leelaz_core PUBLIC
   $<$<BOOL:${USE_HALF}>:USE_HALF>
   $<$<BOOL:${USE_BLAS}>:USE_BLAS>
   $<$<BOOL:${USE_METAL}>:USE_METAL>
+  $<$<AND:$<BOOL:${USE_METAL}>,$<BOOL:${USE_METAL_SELFCHECK}>>:USE_METAL_SELFCHECK>
   $<$<AND:$<BOOL:${USE_BLAS}>,$<PLATFORM_ID:Darwin>>:ACCELERATE_NEW_LAPACK>)
 
 if(NOT USE_CPU_ONLY)

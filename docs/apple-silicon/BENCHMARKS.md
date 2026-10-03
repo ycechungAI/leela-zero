@@ -98,6 +98,52 @@ Thread-count sweep (4 runs each, medians; Accelerate BLAS):
   3,451 vs 3,299 (medians of 5). Small gain, within noise; kept to match the
   OpenBLAS/MKL behaviour of one BLAS thread per search thread.
 
+## Phase 2 step 2.5: fp16 and `--precision auto` (2026-10-03)
+
+Random nets, M4. fp16 means the residual tower runs in fp16; the 1×1 heads
+and the input/output buffers stay fp32. n/s from `--benchmark`, 3 runs.
+
+| Network | fp32 (n/s) | fp16, GPU only (n/s) | Gain |
+|---------|-----------:|---------------------:|-----:|
+| random 15b×192 | 358–365 | 402 (all 3 runs) | **+11%** |
+| random 6b×64 | ~6,100 | ~6,600 | +8% |
+
+- Gate G2 at the N6 fp16 tolerances (policy 1e-2, value 5e-3), 3 positions × 8
+  symmetries: 15b×192 policy 3.4e-4 and value 2.5e-5; 6b×64 policy 3.2e-6 and
+  value 1.1e-4. fp32 still passes at 1e-4 (6.4e-7 and 3.5e-9).
+- `--precision auto` times both precisions at the full batch size with one
+  stream per worker (what the scheduler will see), alternates the
+  measurements and takes medians (15b×192: fp32 355, fp16 409 evals/s), and
+  takes fp16 only if it is ≥ 5% faster and within the N6 tolerances of fp32
+  on six positions through the full head pipeline. Startup cost: about 5 s on
+  15b×192, which step 2.7 caches.
+- A first version measured one batch at a time and picked fp32 on 15b×192:
+  sequential runs hide the CPU-side work that fp16 overlaps. Single-stream
+  runs also favored whichever precision went first (GPU warm-up), hence the
+  alternation.
+- Self-check (`-DUSE_METAL_SELFCHECK=ON`): with the check probability forced to 1,
+  every search evaluation was compared with the CPU, 0 mismatches in both
+  precisions (throughput drops to ~2,300 n/s while it runs).
+
+### Neural Engine placement (experiment, not enabled)
+
+MPSGraph's default optimization level may run the fp16 tower on the Neural
+Engine:
+
+| Network | fp32 GPU | fp16 GPU only | fp16 + ANE placement |
+|---------|---------:|--------------:|---------------------:|
+| random 15b×192 | 358 | 402 | **~760** (758, 769, 731) |
+| random 6b×64 | 6,100 | 6,600 | 6,560 (CPU-bound) |
+
+- First run on a never-seen 15b×192 network: **325 s** (5 n/s), then 2.7 s
+  once the OS has cached the compiled graph. Each batch size is a separate
+  graph.
+- MPSGraph prints `error: Incompatible element type for ANE …` to stdout
+  during compilation, which breaks the GTP stream (`compare_backends.py`
+  could not parse it).
+- Accuracy on a real network is untested, so `MetalNetwork` pins level 0
+  (GPU only). See ADR-004 for the follow-up.
+
 ## Phase 2 step 2.4: MetalScheduler (batched, asynchronous) (2026-10-03)
 
 Random nets, M4, fp32. Interleaved, 3 runs, medians, n/s.
@@ -161,6 +207,8 @@ in step 2.4.
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 15b×192, 3 positions × 8 symmetries | 3.7e-7 | 0 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 6b×64, same | 2.8e-9 | 1.2e-7 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized (Accelerate) vs Eigen 3.4 | random 15b×192, same | 3.4e-7 | 0 | PASS (tol 1e-5) |
+| G2 | Metal fp16 vs CPU (`--cpu-only`) | random 15b×192, 3 positions × 8 symmetries | 3.4e-4 | 2.5e-5 | PASS (N6: 1e-2 / 5e-3) |
+| G2 | Metal fp16 vs CPU (`--cpu-only`) | random 6b×64, same | 3.2e-6 | 1.1e-4 | PASS (N6: 1e-2 / 5e-3) |
 | G2 | Metal fp32 vs CPU (`--cpu-only`) | random 6b×64, 3 positions × 8 symmetries | 3.0e-9 | 1.8e-7 | PASS (tol 1e-4) |
 | G2 | Metal fp32 vs CPU (`--cpu-only`) | random 15b×192, same | 3.1e-7 | 0 | PASS (tol 1e-4) |
 | — | Metal vs CPU raw head outputs (unit test, C=8, 2 blocks, non-trivial BN) | 4 random inputs | 6.0e-7 | — | PASS (tol 1e-4; batch 4 = batch 1 exactly) |

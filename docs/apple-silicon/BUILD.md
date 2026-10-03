@@ -68,6 +68,11 @@ cmake --build --preset macos-cpu
 ctest --preset macos-cpu            # unit tests; works from any directory
 ```
 
+Metal has one extra option: `-DUSE_METAL_SELFCHECK=ON` makes roughly one in
+2,000 evaluations also run on the CPU and abort on a mismatch, like the
+OpenCL build always does. It keeps a second copy of the weights, so it is off
+by default.
+
 ## 3. Get a network
 
 `leelaz` needs a weights file. It looks for one in this order:
@@ -139,7 +144,9 @@ Lizzie needs `-g` (`--gtp`) and works best with pondering left on.
 | `--timemanage off` | Use the full visit budget every move |
 | `--benchmark` | Fixed-workload speed test, then exit (`start.sh -- --benchmark`) |
 | `-l file` | Log file. `start.sh` always writes `logs/leelaz-<time>.log` |
-| `--cpu-only` | In an OpenCL build, skip the GPU |
+| `--cpu-only` | In a GPU build (Metal or OpenCL), skip the GPU |
+| `--precision auto\|single\|half` | Metal and OpenCL: network precision. `auto` (default) picks fp16 only if it is faster and accurate (Metal: ≥ 5% faster, within the N6 tolerances) |
+| `--batchsize N` | Metal and OpenCL: max evaluations per GPU batch (0 = default; Metal: 8, with 16 search threads) |
 | `--tune-only` | OpenCL: run the kernel tuner and exit |
 
 ## 5. Debug

@@ -572,10 +572,57 @@ static float max_diff(const std::vector<float>& a, const std::vector<float>& b) 
     return worst;
 }
 
+// fp16 tower, fp32 heads: results stay close to the fp32 CPU reference. The
+// bound is relative to the output scale and loose enough for any plausible
+// rounding, but a wrong cast or a broken fold is off by order 1.
+TEST(MetalNetworkTest, HalfPrecisionIsCloseToCpu) {
+    SKIP_WITHOUT_METAL();
+    constexpr auto C = 32;
+    constexpr auto blocks = 3;
+    constexpr auto N = 4;
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(4321);
+    const auto weights = make_test_weights(C, blocks, rng);
+    const auto cases = make_cases(weights, C, N, rng);
+
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+    MetalNetwork half(*ctx, C, blocks, *weights, {N}, MetalPrecision::Half);
+
+    std::vector<float> in;
+    for (const auto& c : cases) {
+        in.insert(in.end(), c.in.begin(), c.in.end());
+    }
+    std::vector<float> pol(N * Network::OUTPUTS_POLICY * plane);
+    std::vector<float> val(N * Network::OUTPUTS_VALUE * plane);
+    half.forward(in.data(), N, pol.data(), val.data());
+
+    auto worst = 0.0f, scale = 0.0f;
+    for (auto i = 0; i < N; i++) {
+        for (auto j = 0; j < Network::OUTPUTS_POLICY * plane; j++) {
+            worst = std::max(worst, std::abs(pol[i * Network::OUTPUTS_POLICY * plane + j]
+                                             - cases[i].pol[j]));
+            scale = std::max(scale, std::abs(cases[i].pol[j]));
+        }
+        for (auto j = 0; j < Network::OUTPUTS_VALUE * plane; j++) {
+            worst = std::max(worst, std::abs(val[i * Network::OUTPUTS_VALUE * plane + j]
+                                             - cases[i].val[j]));
+            scale = std::max(scale, std::abs(cases[i].val[j]));
+        }
+    }
+    std::cout << "fp16 vs CPU max diff " << worst << " (output scale " << scale
+              << ")" << std::endl;
+    EXPECT_GT(scale, 0.05f);
+    EXPECT_LE(worst, 0.02f * scale);
+    // fp16 must actually differ from fp32, or the test proves nothing.
+    EXPECT_GT(worst, 0.0f);
+}
+
 // Many search threads, each input distinct: any mix-up between batch rows,
 // slots or waiting threads shows up as a wrong answer.
-TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
-    SKIP_WITHOUT_METAL();
+static void run_concurrency_test(const MetalPrecision precision,
+                                 const float tolerance) {
     constexpr auto C = 32;
     constexpr auto blocks = 2;
     constexpr auto threads = 12;
@@ -585,7 +632,7 @@ TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
     const auto weights = make_test_weights(C, blocks, rng);
     const auto cases = make_cases(weights, C, 37, rng);
 
-    MetalScheduler metal(4, 3);
+    MetalScheduler metal(4, 3, precision);
     metal.initialize(C);
     metal.push_weights(WINOGRAD_ALPHA, Network::INPUT_CHANNELS, C, weights);
 
@@ -602,7 +649,7 @@ TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
                 metal.forward(c.in, pol, val);
                 const auto d = std::max(max_diff(pol, c.pol), max_diff(val, c.val));
                 worst[t] = std::max(worst[t], d);
-                if (d > 1e-4f) {
+                if (d > tolerance) {
                     wrong++;
                 }
                 done++;
@@ -616,6 +663,18 @@ TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
     EXPECT_EQ(wrong.load(), 0);
     std::cout << "max diff vs CPU over " << done.load() << " evals: "
               << *std::max_element(worst.begin(), worst.end()) << std::endl;
+}
+
+TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
+    SKIP_WITHOUT_METAL();
+    run_concurrency_test(MetalPrecision::Single, 1e-4f);
+}
+
+// fp16: the same mix-up check with a tolerance that fp16 rounding fits in but
+// a wrong row or slot (order-1 errors) does not.
+TEST(MetalSchedulerTest, ConcurrentEvaluationsInHalfPrecision) {
+    SKIP_WITHOUT_METAL();
+    run_concurrency_test(MetalPrecision::Half, 0.05f);
 }
 
 // drain() releases every waiting thread with NetworkHaltException, and the

@@ -79,10 +79,12 @@ bool cfg_dumbpass;
 #ifdef USE_OPENCL
 std::vector<int> cfg_gpus;
 bool cfg_sgemm_exhaustive;
-bool cfg_tune_only;
-#ifdef USE_HALF
-precision_t cfg_precision;
 #endif
+#if defined(USE_OPENCL) || defined(USE_METAL)
+bool cfg_tune_only;
+#endif
+#if defined(USE_HALF) || defined(USE_METAL)
+precision_t cfg_precision;
 #endif
 float cfg_puct;
 float cfg_logpuct;
@@ -337,11 +339,12 @@ void GTP::setup_default_parameters() {
 #ifdef USE_OPENCL
     cfg_gpus = {};
     cfg_sgemm_exhaustive = false;
-    cfg_tune_only = false;
-
-#ifdef USE_HALF
-    cfg_precision = precision_t::AUTO;
 #endif
+#if defined(USE_OPENCL) || defined(USE_METAL)
+    cfg_tune_only = false;
+#endif
+#if defined(USE_HALF) || defined(USE_METAL)
+    cfg_precision = precision_t::AUTO;
 #endif
     cfg_puct = 0.5f;
     cfg_logpuct = 0.015f;

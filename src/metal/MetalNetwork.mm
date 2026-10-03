@@ -22,11 +22,14 @@
 
 #include "MetalNetwork.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <map>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "MetalContextImpl.h"
@@ -45,6 +48,14 @@ NSArray<NSNumber*>* shape4(const int a, const int b, const int c, const int d) {
 
 NSData* float_data(const std::vector<float>& v) {
     return [NSData dataWithBytes:v.data() length:v.size() * sizeof(float)];
+}
+
+NSData* half_data(const std::vector<float>& v) {
+    std::vector<_Float16> h(v.size());
+    for (auto i = std::size_t{0}; i < v.size(); i++) {
+        h[i] = static_cast<_Float16>(v[i]);
+    }
+    return [NSData dataWithBytes:h.data() length:h.size() * sizeof(_Float16)];
 }
 
 // y = scale * (conv(x) - mean) folded into conv_{w * scale}(x) + b'.
@@ -97,14 +108,19 @@ struct Compiled {
 
 Compiled compile(id<MTLDevice> device, const int C, const int blocks,
                  const ForwardPipe::ForwardPipeWeights& weights,
-                 const int batch) {
+                 const int batch, const MetalPrecision precision) {
     constexpr auto B = BOARD_SIZE;
+    const auto half = precision == MetalPrecision::Half;
+    const auto tower_type = half ? MPSDataTypeFloat16 : MPSDataTypeFloat32;
     MPSGraph* g = [[MPSGraph alloc] init];
 
     MPSGraphTensor* input = [g placeholderWithShape:shape4(batch, PLANES, B, B)
                                            dataType:MPSDataTypeFloat32
                                                name:@"input"];
     const auto conv3 = conv_descriptor(1);
+    const auto tower_data = [half](const std::vector<float>& v) {
+        return half ? half_data(v) : float_data(v);
+    };
 
     // conv + folded BN (+ residual) + ReLU
     auto layer = [&](MPSGraphTensor* x, const int index, const int in_ch,
@@ -112,12 +128,12 @@ Compiled compile(id<MTLDevice> device, const int C, const int blocks,
         const auto f = fold_bn(weights.m_conv_weights[index],
                                weights.m_batchnorm_means[index],
                                weights.m_batchnorm_stddevs[index], C, in_ch);
-        MPSGraphTensor* w = [g constantWithData:float_data(f.w)
+        MPSGraphTensor* w = [g constantWithData:tower_data(f.w)
                                           shape:shape4(C, in_ch, 3, 3)
-                                       dataType:MPSDataTypeFloat32];
-        MPSGraphTensor* bias = [g constantWithData:float_data(f.b)
+                                       dataType:tower_type];
+        MPSGraphTensor* bias = [g constantWithData:tower_data(f.b)
                                              shape:shape4(1, C, 1, 1)
-                                          dataType:MPSDataTypeFloat32];
+                                          dataType:tower_type];
         MPSGraphTensor* t = [g convolution2DWithSourceTensor:x
                                                weightsTensor:w
                                                   descriptor:conv3
@@ -129,11 +145,19 @@ Compiled compile(id<MTLDevice> device, const int C, const int blocks,
         return [g reLUWithTensor:t name:nil];
     };
 
-    MPSGraphTensor* x = layer(input, 0, PLANES, nil);
+    MPSGraphTensor* x = input;
+    if (half) {
+        x = [g castTensor:x toType:MPSDataTypeFloat16 name:@"to_half"];
+    }
+    x = layer(x, 0, PLANES, nil);
     for (auto b = 0; b < blocks; b++) {
         MPSGraphTensor* skip = x;
         MPSGraphTensor* y = layer(x, 1 + 2 * b, C, nil);
         x = layer(y, 2 + 2 * b, C, skip);
+    }
+    if (half) {
+        // Heads in fp32: the logits go through BN, FC and softmax on the CPU.
+        x = [g castTensor:x toType:MPSDataTypeFloat32 name:@"to_single"];
     }
 
     // Heads: raw 1x1 convolutions. BN, FC, softmax and tanh stay on the CPU.
@@ -158,11 +182,19 @@ Compiled compile(id<MTLDevice> device, const int C, const int blocks,
                                          dataType:MPSDataTypeFloat32];
     MPSGraphDevice* gdev = [MPSGraphDevice deviceWithMTLDevice:device];
     Compiled c;
+    // Level 0: GPU only. The default level 1 adds a placement pass that may
+    // run an fp16 tower on the Neural Engine. That is about 2x faster on a
+    // random 15b x 192 net, but the first run compiles for ~5 minutes and
+    // MPSGraph prints "error:" lines to stdout, which would corrupt GTP.
+    // See BENCHMARKS.md (step 2.5) and ADR-004.
+    MPSGraphCompilationDescriptor* cd =
+        [[MPSGraphCompilationDescriptor alloc] init];
+    cd.optimizationLevel = MPSGraphOptimizationLevel0;
     c.exe = [g compileWithDevice:gdev
                            feeds:@{input : in_type}
                    targetTensors:@[ pol, val ]
                 targetOperations:nil
-           compilationDescriptor:nil];
+           compilationDescriptor:cd];
     if (c.exe == nil) {
         throw std::runtime_error("Metal: MPSGraph compilation failed");
     }
@@ -218,7 +250,8 @@ struct MetalNetwork::Impl {
 MetalNetwork::MetalNetwork(const MetalContext& ctx, const int channels,
                            const int residual_blocks,
                            const ForwardPipe::ForwardPipeWeights& weights,
-                           const std::vector<int>& batch_sizes)
+                           const std::vector<int>& batch_sizes,
+                           const MetalPrecision precision)
     : m_impl(std::make_unique<Impl>()) {
     @autoreleasepool {
         m_impl->device = ctx.impl().device;
@@ -234,7 +267,7 @@ MetalNetwork::MetalNetwork(const MetalContext& ctx, const int channels,
             if (m_impl->graphs.count(batch) == 0) {
                 m_impl->graphs.emplace(
                     batch, compile(m_impl->device, channels, residual_blocks,
-                                   weights, batch));
+                                   weights, batch, precision));
             }
         }
     }
@@ -320,6 +353,57 @@ void MetalNetwork::run(MetalSlot& slot) const {
                                      + std::string([failure UTF8String]));
         }
     }
+}
+
+double MetalNetwork::benchmark(const int batch, const int runs,
+                               const int streams) const {
+    std::vector<std::unique_ptr<MetalSlot>> slots;
+    for (auto s = 0; s < streams; s++) {
+        slots.push_back(make_slot(batch));
+        // Binary planes like real positions; the values do not change the
+        // timing.
+        auto* const in = slots.back()->input();
+        for (auto i = 0; i < batch * PLANES * PLANE; i++) {
+            in[i] = static_cast<float>((i * 2654435761u >> 7) & 1);
+        }
+    }
+
+    std::atomic<int> ready{0};
+    std::atomic<bool> go{false};
+    std::atomic<bool> failed{false};
+    std::vector<std::thread> threads;
+    for (auto s = 0; s < streams; s++) {
+        threads.emplace_back([&, s]() {
+            try {
+                run(*slots[s]); // warm-up: first-use kernel setup
+                ready++;
+                while (!go) {
+                    std::this_thread::yield();
+                }
+                for (auto i = 0; i < runs; i++) {
+                    run(*slots[s]);
+                }
+            } catch (...) {
+                failed = true;
+                ready++;
+            }
+        });
+    }
+    while (ready < streams) {
+        std::this_thread::yield();
+    }
+    const auto start = std::chrono::steady_clock::now();
+    go = true;
+    for (auto& t : threads) {
+        t.join();
+    }
+    const auto seconds = std::chrono::duration<double>(
+                             std::chrono::steady_clock::now() - start)
+                             .count();
+    if (failed) {
+        throw std::runtime_error("Metal: benchmark run failed");
+    }
+    return static_cast<double>(batch) * runs * streams / seconds;
 }
 
 void MetalNetwork::forward(const float* const in, const int batch,
