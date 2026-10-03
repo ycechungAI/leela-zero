@@ -104,7 +104,7 @@ Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done
 |------|:-------:|:----:|:------:|--------------|--------|-------|
 | 2.1 | S | Opus 5.5 | ✅ | ctest, OpenCL↔CPU parity 1.8e-7, TSan (batching + drain): 0 races | `5a4182f` | Also fixed a spurious-wakeup race in forward() |
 | 2.2 | M | Sonnet 5.5 | ✅ | ctest (new `MetalContextTest` compiles and runs an MSL kernel on the M4 GPU via shared buffers), default build still green | `bce8066` | Pure-C++ header, ObjC++ only in `src/metal/*.mm` (ARC). `USE_METAL` defaults OFF and errors off-Apple |
-| 2.3 | S→M | | ⬜ | | | |
+| 2.3 | S→M | Opus 5.5 (plan) | 🔄 | | | Plan: [11-plan-2.3-mpsgraph.md](11-plan-2.3-mpsgraph.md). Sonnet builds 2.3a → 2.3d |
 | 2.4 | S | | ⬜ | | | |
 | 2.5 | M | | ⬜ | | | |
 | 2.6 | L | | ⬜ | | | |
