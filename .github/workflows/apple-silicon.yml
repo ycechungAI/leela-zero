@@ -1,0 +1,97 @@
+name: apple-silicon
+
+on:
+  push:
+    branches: [next, apple-silicon, "as/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-cpu:
+    name: macOS arm64 / CPU (Accelerate) + parity
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install boost
+      - name: Build (Accelerate)
+        run: |
+          cmake --preset macos-cpu
+          cmake --build --preset macos-cpu -j"$(sysctl -n hw.ncpu)"
+      - name: Unit tests
+        working-directory: build
+        run: ./tests
+      - name: GTP smoke test (random network)
+        run: scripts/macos/debug.sh smoke
+      - name: Build Eigen-only reference
+        run: |
+          cmake -S . -B build-eigen -DUSE_CPU_ONLY=1 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-eigen -j"$(sysctl -n hw.ncpu)" --target leelaz
+      - name: Parity gate G1 (Accelerate vs Eigen)
+        run: |
+          python3 scripts/macos/make_random_net.py net.txt --blocks 6 --filters 64
+          python3 scripts/macos/selfplay.py --leelaz build/leelaz -w net.txt \
+              -o positions -n 1 -v 2
+          python3 scripts/parity/compare_backends.py \
+              --ref build-eigen/leelaz --test build/leelaz -w net.txt \
+              --sgf 'positions/*.sgf' --moves 0,10,60,200 --tol 1e-5
+
+  macos-asan:
+    name: macOS arm64 / ASan + UBSan
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install boost
+      - name: Build
+        run: |
+          cmake --preset macos-asan
+          cmake --build --preset macos-asan -j"$(sysctl -n hw.ncpu)"
+      - name: Unit tests
+        working-directory: build-asan
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ./tests
+
+  macos-opencl:
+    name: macOS arm64 / OpenCL (compile only)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install boost
+      - name: Build
+        run: |
+          cmake --preset macos-opencl
+          cmake --build --preset macos-opencl -j"$(sysctl -n hw.ncpu)"
+
+  linux-cpu:
+    name: Linux x86_64 / CPU (OpenBLAS)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libboost-program-options-dev \
+              libboost-filesystem-dev libopenblas-dev zlib1g-dev
+      - name: Build
+        run: |
+          cmake --preset linux-cpu
+          cmake --build --preset linux-cpu -j"$(nproc)"
+      - name: Unit tests
+        working-directory: build
+        run: ./tests

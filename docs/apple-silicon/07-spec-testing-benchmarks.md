@@ -27,11 +27,15 @@ CI caches this directory.
 
 ### Implementation notes
 
-- G2 needs a test hook to evaluate a single position on a chosen backend.
-  Add a hidden GTP command `lz-nn-eval <backend> <symmetry>` (debug builds or
-  `--debug-gtp`) that prints the 362 policy values and the value. A Python
-  harness (`scripts/parity/compare_backends.py`) drives two `leelaz` processes
-  and diffs them.
+- **Implemented (Phase 0):** the unlisted GTP command `lz-nn-eval [symmetry]`
+  evaluates the current position on the loaded backend, bypassing the cache.
+  It prints the winrate, the pass prior and the 361 priors at `%.9g`.
+  `scripts/parity/compare_backends.py` drives two `leelaz` processes, which can
+  be different builds, backends or (with `--test-weights`) networks. It loads
+  the same SGF positions into both, diffs all 8 symmetries, and exits non-zero
+  past the tolerance. Choosing the backend per process replaced the original
+  `lz-nn-eval <backend> <symmetry>` design, because one process holds one
+  backend.
 - The same hook serves T2/T3: the MLX side dumps its outputs for the same
   positions (`lz.tools.dump_eval`).
 - Positions come from SGFs under `src/tests/` plus 100 positions sampled from

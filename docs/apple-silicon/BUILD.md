@@ -55,6 +55,18 @@ Each configuration gets its own build directory, so they don't clobber each othe
 
 Generated data goes in `data/` and logs go in `logs/`. Git ignores both.
 
+### CMake presets (without the scripts)
+
+The same configurations are available as CMake presets, which IDEs such as
+CLion and VS Code pick up automatically:
+
+```bash
+cmake --list-presets
+cmake --preset macos-cpu            # or macos-opencl, macos-debug, macos-asan
+cmake --build --preset macos-cpu
+cd build && ./tests
+```
+
 ## 3. Get a network
 
 `leelaz` needs a weights file. It looks for one in this order:
@@ -191,6 +203,28 @@ ASan reports appear on stderr and abort the run (`abort_on_error=1`). Leak
 detection is off by default; enable it with
 `ASAN_OPTIONS=detect_leaks=1 scripts/macos/debug.sh asan`.
 
+### Compare backends numerically
+
+The unlisted GTP command `lz-nn-eval [symmetry]` prints the raw network output
+for the current position: winrate, pass prior, then 361 priors. It runs
+uncached, at full precision. `scripts/parity/compare_backends.py` runs two
+engines side by side and diffs them over SGF positions and all 8 symmetries:
+
+```bash
+# Accelerate build vs an Eigen-only build (gate G1), tolerance 1e-5
+python3 scripts/parity/compare_backends.py \
+    --ref "build-eigen/leelaz" --test "build/leelaz" \
+    -w net.gz --sgf 'data/selfplay/*.sgf' --moves 0,10,60,200 --tol 1e-5
+
+# The same build with two networks (e.g. a re-exported net); should match exactly
+python3 scripts/parity/compare_backends.py --ref build/leelaz --test build/leelaz \
+    -w original.gz --test-weights reexported.txt
+```
+
+It exits 1 when a difference exceeds the tolerance, so it can be used in CI
+(see `.github/workflows/apple-silicon.yml`). By hand:
+`printf 'play b Q16\nlz-nn-eval 0\nquit\n' | build/leelaz --gtp -q -w net.gz`.
+
 ### Profiling
 
 - `sample <pid> 5` gives a quick 5-second stack sample of a running leelaz. Works with just the Command Line Tools.
@@ -209,6 +243,7 @@ detection is off by default; enable it with
 | `unknown warning option '-Wno-maybe-uninitialized'` | Old CMakeLists. Fixed on this branch (GCC-only flag now) |
 | lldb shows assembly, not source | You're debugging the Release (`-flto`) build. Use `build.sh debug` / `debug.sh lldb` |
 | `submodule ... not initialized` errors | `git submodule update --init --recursive` |
+| Eigen submodule fetch fails in an older clone | Eigen moved to GitLab: `git submodule sync && git submodule update --init --recursive` |
 
 ## 6. Training workflow
 

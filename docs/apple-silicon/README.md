@@ -23,6 +23,7 @@ Apple M4 Mac mini (arm64 / aarch64). The port has three goals:
 ## Using it now
 
 **[BUILD.md](BUILD.md)** covers building, running, debugging and the training-data workflow on an M4, with the helper scripts in `scripts/macos/`.
+Measured numbers live in **[BENCHMARKS.md](BENCHMARKS.md)**.
 
 ## Reading order
 

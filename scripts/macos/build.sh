@@ -45,7 +45,7 @@ case "$CFG" in
 esac
 
 info "configuring ($CFG) in ${BUILD_DIR#$REPO_ROOT/}"
-cmake -S . -B "$BUILD_DIR" "${CMAKE_ARGS[@]}" -Wno-dev >/dev/null
+cmake -S . -B "$BUILD_DIR" "${CMAKE_ARGS[@]}" >/dev/null
 
 info "building leelaz and tests"
 cmake --build "$BUILD_DIR" -j"$(sysctl -n hw.ncpu)" --target leelaz tests

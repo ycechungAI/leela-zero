@@ -7,17 +7,25 @@ ordered. Every step is a PR into `apple-silicon` unless noted otherwise.
 
 ## Phase 0 — `v0.17.1-as.0` "Builds on M4" (spec 03)
 
-1. Fork hygiene: add the `upstream` remote, create the `apple-silicon` branch,
-   and add this spec set.
-2. Init submodules, repoint Eigen to GitLab 3.4.0, and bump gtest.
-3. CMake: range `cmake_minimum_required`, make OpenCL optional, link the
-   Accelerate framework, use `-mcpu` rules on Apple, and IPO instead of raw
-   `-flto`.
-4. Add `CMakePresets.json` (`macos-cpu`, `macos-opencl`, `macos-debug-asan`).
-5. Write `BUILD.md` with Homebrew deps and the exact commands.
-6. Add the test-net fetch script and the `lz-nn-eval` debug GTP hook (spec 07).
-7. **Record the baseline**: OpenCL and Eigen numbers in `BENCHMARKS.md`.
-8. CI: `build-cpu` + `linux` jobs.
+Status key: ✅ done · 🟡 partial · ⬜ not started
+
+1. 🟡 Fork hygiene: spec set added (branch `as/p0-build`). Still to do: add the
+   `upstream` remote and create the `apple-silicon` integration branch.
+2. ✅ Submodules initialized. Eigen moved to GitLab 3.4.0 (parity with 3.3:
+   ≤1e-9, same speed). gtest bumped to v1.15.2.
+3. 🟡 CMake: version range, OpenCL optional, Accelerate via
+   `ACCELERATE_NEW_LAPACK`, C++17, LTO only in Release. Still to do: `-mcpu`
+   rules for distributable builds, IPO instead of raw `-flto`.
+4. ✅ `CMakePresets.json` (`macos-cpu`, `macos-opencl`, `macos-debug`,
+   `macos-asan`, `linux-cpu`).
+5. ✅ `BUILD.md` + `scripts/macos/` (build, start, debug, train).
+6. 🟡 `lz-nn-eval` GTP hook + `scripts/parity/compare_backends.py` done. G1
+   (Accelerate vs Eigen) passes. Still to do: test-net fetch script (needs
+   real networks).
+7. 🟡 `BENCHMARKS.md` started with provisional random-network numbers. Still
+   to do: the real baseline with public nets, including OpenCL.
+8. ✅ CI: `.github/workflows/apple-silicon.yml` (macOS CPU + G1 parity, ASan,
+   OpenCL compile, Linux).
 
 **Exit:** gate G0 green on M4 and CI. Baseline recorded. Tag `as.0`.
 
