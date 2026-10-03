@@ -136,6 +136,22 @@ or
 
 Lizzie needs `-g` (`--gtp`) and works best with pondering left on.
 
+### Metal autotune
+
+With neither `--batchsize` nor `-t`, the Metal backend measures batch sizes 8,
+16, 32 and 64 in fp32 and fp16 the first time it sees a network *shape*
+(device, filters, blocks), saves the table, and picks the smallest batch within
+5% of the best throughput. The thread count follows (batch × 2 workers). That
+takes a few seconds (about 20 s for 15b×192) the first time; later starts read
+the cache and take well under a second. A new generation of the same network
+reuses the table. `leelaz --tune-only -w net` re-measures on demand.
+
+With `--precision auto`, fp16 is used only if the table says it is at least 5%
+faster **and** it matches fp32 within the N6 tolerances on this particular
+network, which is checked on every start because it depends on the weights, not
+the shape. Fixing `--batchsize` or `-t` skips the table; fp16 is then timed on
+the spot.
+
 ### Useful leelaz options
 
 | Option | Meaning |
@@ -149,8 +165,8 @@ Lizzie needs `-g` (`--gtp`) and works best with pondering left on.
 | `--backend auto\|metal\|opencl\|cpu` | Compute backend; `auto` (default) is Metal, else OpenCL, else CPU, among those built in. Naming one that is not built in is an error that lists what is |
 | `--cpu-only` | Same as `--backend cpu` |
 | `--precision auto\|single\|half` | Metal and OpenCL: network precision. `auto` (default) picks fp16 only if it is faster and accurate (Metal: ≥ 5% faster, within the N6 tolerances) |
-| `--batchsize N` | Metal and OpenCL: max evaluations per GPU batch (0 = default; Metal: 8, with 16 search threads) |
-| `--tune-only` | OpenCL: run the kernel tuner and exit |
+| `--batchsize N` | Metal and OpenCL: max evaluations per GPU batch (0 = default). On Metal, with neither this nor `-t` given, the batch size and thread count come from autotune (below) |
+| `--tune-only` | OpenCL: run the kernel tuner and exit. Metal: re-measure the batch sizes, save them and exit |
 
 ## 5. Debug
 
@@ -322,6 +338,7 @@ decides (default hypothesis 0 vs 35 Elo).
 |------|-------|
 | Default network | `~/.local/share/leela-zero/best-network` |
 | OpenCL tuning cache | `~/.local/share/leela-zero/leelaz_opencl_tuning` |
+| Metal autotune cache | `~/Library/Application Support/leela-zero/metal_tuning` (override with `$LZ_METAL_TUNING_FILE`; plain text, safe to delete) |
 | Script logs | `logs/` (repo root) |
 | Training data | `data/` (repo root), or `$LZ_TRAIN_DATA` |
-| Builds | `build/`, `build-opencl/`, `build-debug/`, `build-asan/`, `build-dist/` |
+| Builds | `build-metal/`, `build/`, `build-opencl/`, `build-debug/`, `build-asan/`, `build-dist/` |

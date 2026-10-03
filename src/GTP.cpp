@@ -83,6 +83,9 @@ bool cfg_sgemm_exhaustive;
 #if defined(USE_OPENCL) || defined(USE_METAL)
 bool cfg_tune_only;
 #endif
+#ifdef USE_METAL
+bool cfg_autotune_batch;
+#endif
 #if defined(USE_HALF) || defined(USE_METAL)
 precision_t cfg_precision;
 #endif
@@ -401,6 +404,9 @@ void GTP::setup_default_parameters() {
 #endif
 #if defined(USE_OPENCL) || defined(USE_METAL)
     cfg_tune_only = false;
+#endif
+#ifdef USE_METAL
+    cfg_autotune_batch = false;
 #endif
 #if defined(USE_HALF) || defined(USE_METAL)
     cfg_precision = precision_t::AUTO;

@@ -121,3 +121,26 @@
   `BatchQueue` ever returns partial batches, the full-size slot still works
   (unused rows are ignored), at the cost of computing padding. Step 2.7
   (autotune) should revisit the batch size per network.
+
+## ADR-008: Metal autotune caches speed per network shape, checks accuracy per network
+
+- **Status:** Accepted (Phase 2, step 2.7). Refines spec 05 §3.6.
+- **Context:** The best batch size and precision depend on the device and the
+  network's size, so measuring on every start costs seconds (20 s for
+  15b×192), which is unacceptable for a GUI engine and for self-play, where a
+  new network generation starts a new process. But whether fp16 is accurate
+  depends on the weight *values*, so caching that verdict by shape could
+  approve a network where fp16 fails.
+- **Decision:** The cache (`~/Library/Application Support/leela-zero/
+  metal_tuning`, plain text, tab separated, one row per device × channels ×
+  blocks × precision × batch) holds throughput only. The fp16 accuracy check
+  (N6 tolerances, six positions through the full head pipeline) runs on every
+  start, in about 0.2 s. `--tune-only` forces a re-measurement. Writes go to a
+  temporary file and are renamed, and unreadable rows are skipped, so a
+  crashed or concurrent process cannot corrupt it. A user-fixed `--batchsize`
+  or `-t` skips the table and times fp32/fp16 at that batch size instead.
+- **Consequences:** Starts are fast after the first, and a new training
+  generation costs nothing extra. The thread pool is created after the network
+  because autotune can change the thread count. The cache is not invalidated
+  by OS or driver updates; `--tune-only` is the remedy, and a stale table only
+  costs a slightly suboptimal batch size.

@@ -56,7 +56,10 @@
 #include "CPUPipe.h"
 #include "Network.h"
 #ifdef USE_METAL
+#include <optional>
+
 #include "MetalScheduler.h"
+#include "MetalTuning.h"
 #endif
 #include "zlib.h"
 #ifdef USE_OPENCL
@@ -519,10 +522,70 @@ std::vector<GameState> metal_check_positions() {
 }
 } // namespace
 
-// Builds the Metal pipe for cfg_precision. Auto times both precisions and
-// takes fp16 only if it is at least 5% faster and stays within the N6
-// tolerances (policy 1e-2, value 5e-3) of fp32 on a handful of positions.
+// Builds the Metal pipe. Order of events:
+// 1. If the batch size is not fixed by the user (or --tune-only is given),
+//    measure every batch size in both precisions, or load the measurements
+//    cached for this device and network shape, and pick the batch size (and,
+//    for --precision auto, the precision) from them. The thread count follows
+//    the batch size.
+// 2. Build the pipe. Precision auto takes fp16 only if it is accurate on this
+//    network (N6 tolerances: policy 1e-2, value 5e-3, on a handful of
+//    positions through the whole head pipeline) and the measurements say it is
+//    at least 5% faster; with a user-fixed batch size there are no cached
+//    measurements, so both precisions are timed right here.
 std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
+    const auto blocks =
+        static_cast<int>((m_fwd_weights->m_conv_weights.size() - 1) / 2);
+    constexpr auto workers = MetalScheduler::DEFAULT_WORKERS;
+
+    std::optional<MetalTuning::Choice> tuned;
+    if (cfg_autotune_batch || cfg_tune_only) {
+        std::string error;
+        const auto context = MetalContext::create(error);
+        if (!context) {
+            throw std::runtime_error("Metal: " + error);
+        }
+        const MetalTuning::Key key{context->device_name(), channels, blocks};
+        const MetalTuning::Cache cache(MetalTuning::Cache::default_path());
+        std::vector<MetalTuning::Measurement> table;
+        const auto shape = key.device + ", " + std::to_string(channels)
+                           + " channels, " + std::to_string(blocks)
+                           + " blocks";
+        auto print_table = true;
+        if (!cfg_tune_only && cache.load(key, table)) {
+            myprintf("Metal autotune: cached measurements for %s.\n",
+                     shape.c_str());
+            print_table = false;
+        } else {
+            myprintf("Metal autotune: measuring %s (once per network "
+                     "shape)...\n",
+                     shape.c_str());
+            table = MetalTuning::measure(*context, channels, blocks,
+                                         *m_fwd_weights, workers, 0.25, {});
+            if (!cache.store(key, table)) {
+                myprintf("Metal autotune: could not save the measurements to "
+                         "%s.\n",
+                         MetalTuning::Cache::default_path().c_str());
+            }
+        }
+        if (print_table) {
+            myprintf("%s", MetalTuning::format_table(table).c_str());
+        }
+        if (cfg_tune_only) {
+            myprintf("Measurements saved to %s.\n",
+                     MetalTuning::Cache::default_path().c_str());
+            exit(EXIT_SUCCESS);
+        }
+        tuned = MetalTuning::choose(table, cfg_precision != precision_t::HALF,
+                                    cfg_precision != precision_t::SINGLE);
+        if (cfg_autotune_batch) {
+            cfg_batch_size = tuned->batch;
+            cfg_num_threads = std::min<size_t>(MAX_CPUS, tuned->batch * workers);
+            myprintf("Metal autotune: batch %d, %d threads.\n", cfg_batch_size,
+                     cfg_num_threads);
+        }
+    }
+
     const auto make = [this, channels](const MetalPrecision precision) {
         auto pipe = std::make_unique<MetalScheduler>(
             cfg_batch_size, MetalScheduler::DEFAULT_WORKERS, precision);
@@ -542,13 +605,17 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         announce(*pipe);
         return pipe;
     }
+    if (tuned && tuned->precision == MetalPrecision::Single) {
+        myprintf("Using Metal single precision (half is not at least 5%% "
+                 "faster).\n");
+        auto pipe = make(MetalPrecision::Single);
+        announce(*pipe);
+        return pipe;
+    }
 
-    myprintf("Initializing Metal (autodetecting precision).\n");
+    myprintf("Initializing Metal (checking half precision).\n");
     std::unique_ptr<ForwardPipe> single = make(MetalPrecision::Single);
     std::unique_ptr<ForwardPipe> half = make(MetalPrecision::Half);
-    const auto speed = [](const std::unique_ptr<ForwardPipe>& pipe) {
-        return static_cast<MetalScheduler&>(*pipe).benchmark(10);
-    };
     const auto evaluate = [this](std::unique_ptr<ForwardPipe>& pipe) {
         // get_output_internal() runs on m_forward.
         m_forward = std::move(pipe);
@@ -573,32 +640,46 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         value_diff =
             std::max(value_diff, std::abs(ref[i].winrate - test[i].winrate));
     }
-    // Alternate the measurements and take medians, so that GPU warm-up and
-    // thermal drift do not favor whichever precision runs first.
-    const auto median = [](std::vector<double> v) {
-        std::sort(v.begin(), v.end());
-        return v[v.size() / 2];
-    };
-    std::vector<double> single_runs, half_runs;
-    for (auto round = 0; round < 5; round++) {
-        single_runs.push_back(speed(single));
-        half_runs.push_back(speed(half));
-    }
-    const auto single_speed = median(single_runs);
-    const auto half_speed = median(half_runs);
-    myprintf("Metal: single %.0f, half %.0f evals/s; half differs by %.1e "
-             "(policy) and %.1e (value).\n",
-             single_speed, half_speed, policy_diff, value_diff);
-
     const auto accurate = policy_diff <= 1e-2f && value_diff <= 5e-3f;
-    auto& chosen = accurate && half_speed > single_speed * 1.05 ? half : single;
-    if (&chosen == &half) {
-        myprintf("Using Metal half precision (at least 5%% faster than single).\n");
-    } else if (!accurate) {
-        myprintf("Using Metal single precision (half is outside the tolerance).\n");
+    myprintf("Metal: half differs from single by %.1e (policy) and %.1e "
+             "(value).\n",
+             policy_diff, value_diff);
+
+    auto use_half = false;
+    if (!accurate) {
+        myprintf("Using Metal single precision (half is outside the "
+                 "tolerance).\n");
+    } else if (tuned) {
+        use_half = true;
+        myprintf("Using Metal half precision (at least 5%% faster than "
+                 "single).\n");
     } else {
-        myprintf("Using Metal single precision (less than 5%% slower than half).\n");
+        // No measurements for this batch size: time both here. Alternate the
+        // measurements and take medians, so that GPU warm-up and thermal drift
+        // do not favor whichever precision runs first.
+        const auto speed = [](const std::unique_ptr<ForwardPipe>& pipe) {
+            return static_cast<MetalScheduler&>(*pipe).benchmark(10);
+        };
+        const auto median = [](std::vector<double> v) {
+            std::sort(v.begin(), v.end());
+            return v[v.size() / 2];
+        };
+        std::vector<double> single_runs, half_runs;
+        for (auto round = 0; round < 5; round++) {
+            single_runs.push_back(speed(single));
+            half_runs.push_back(speed(half));
+        }
+        const auto single_speed = median(single_runs);
+        const auto half_speed = median(half_runs);
+        myprintf("Metal: single %.0f, half %.0f evals/s.\n", single_speed,
+                 half_speed);
+        use_half = half_speed > single_speed * 1.05;
+        myprintf(use_half ? "Using Metal half precision (at least 5%% faster "
+                            "than single).\n"
+                          : "Using Metal single precision (less than 5%% "
+                            "slower than half).\n");
     }
+    auto& chosen = use_half ? half : single;
     announce(static_cast<MetalScheduler&>(*chosen));
     return std::move(chosen);
 }

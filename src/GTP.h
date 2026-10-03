@@ -103,6 +103,11 @@ extern bool cfg_sgemm_exhaustive;
 #if defined(USE_OPENCL) || defined(USE_METAL)
 extern bool cfg_tune_only;
 #endif
+#ifdef USE_METAL
+// True when neither --threads nor --batchsize was given: Metal then picks the
+// batch size (and with it the thread count) by autotune.
+extern bool cfg_autotune_batch;
+#endif
 #if defined(USE_HALF) || defined(USE_METAL)
 enum class precision_t {
     AUTO, SINGLE, HALF

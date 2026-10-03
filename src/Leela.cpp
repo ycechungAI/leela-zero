@@ -419,6 +419,9 @@ static void parse_commandline(const int argc, const char* const argv[]) {
     } else if (cfg_backend == backend_t::METAL) {
         calculate_thread_count_gpu(vm, MetalScheduler::DEFAULT_WORKERS,
                                    METAL_DEFAULT_BATCH);
+        // Network::init_metal replaces this default by measurement.
+        cfg_autotune_batch = vm["threads"].as<unsigned int>() == 0
+                             && vm["batchsize"].as<unsigned int>() == 0;
         myprintf("Using Metal batch size of %d\n", cfg_batch_size);
 #endif
 #ifdef USE_OPENCL
@@ -565,13 +568,6 @@ static void initialize_network() {
 
 // Setup global objects after command line has been parsed
 void init_global_objects() {
-    // Search threads ask for performance cores (a no-op off Apple Silicon).
-    for (auto i = size_t{0}; i < cfg_num_threads; i++) {
-        thread_pool.add_thread([]() { Platform::set_thread_qos_interactive(); });
-    }
-    // The main thread also searches.
-    Platform::set_thread_qos_interactive();
-
     // Use deterministic random numbers for hashing
     auto rng = std::make_unique<Random>(5489);
     Zobrist::init_zobrist(*rng);
@@ -583,7 +579,16 @@ void init_global_objects() {
 
     Utils::create_z_table();
 
+    // The network may change cfg_num_threads (Metal autotune), so the pool is
+    // created after it.
     initialize_network();
+
+    // Search threads ask for performance cores (a no-op off Apple Silicon).
+    for (auto i = size_t{0}; i < cfg_num_threads; i++) {
+        thread_pool.add_thread([]() { Platform::set_thread_qos_interactive(); });
+    }
+    // The main thread also searches.
+    Platform::set_thread_qos_interactive();
 }
 
 void benchmark(GameState& game) {

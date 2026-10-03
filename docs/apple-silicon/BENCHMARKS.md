@@ -98,6 +98,41 @@ Thread-count sweep (4 runs each, medians; Accelerate BLAS):
   3,451 vs 3,299 (medians of 5). Small gain, within noise; kept to match the
   OpenBLAS/MKL behaviour of one BLAS thread per search thread.
 
+## Phase 2 step 2.7: autotune (2026-10-03)
+
+Random nets, M4. Default run (autotuned) against the step 2.4 defaults (fp32,
+batch 8, 16 threads) and against batch 8 with `--precision auto`. n/s from
+`--benchmark`, 3 runs each, the cache warm.
+
+| Network | Autotune picks | Autotuned default | 2.4 defaults (fp32 B8) | B8 + auto precision |
+|---------|----------------|------------------:|-----------------------:|--------------------:|
+| random 6b×64 | fp16, batch 16, 32 threads | **7,450** | 6,150 (+21%) | 6,725 (+11%) |
+| random 15b×192 | fp16, batch 8, 16 threads | **399** | 357 (+12%) | 392 (+2%) |
+
+Against the CPU (Accelerate, 10 threads: about 3,100 and 200 n/s) that is
+2.4× and 2.0×.
+
+Measurements the choice came from (evals/s, GPU only, 2 streams):
+
+| 6b×64 | B=8 | B=16 | B=32 | B=64 |
+|-------|----:|-----:|-----:|-----:|
+| single | 6,916 | 7,267 | 7,233 | 6,784 |
+| half | 7,382 | 7,802 | 7,995 | 7,634 |
+
+| 15b×192 | B=8 | B=16 | B=32 | B=64 |
+|---------|----:|-----:|-----:|-----:|
+| single | 357 | 349 | 359 | 364 |
+| half | 397 | 387 | 386 | 400 |
+
+- One-off cost on a cold cache: 6 s (6b×64), 19 s (15b×192); a cached start
+  takes 0.2 s and 0.6 s, including the fp16 accuracy check.
+- The 5% rule picks 16 for the small net (8 is 7% below its best) and 8 for
+  the big one (flat across batch sizes). Larger batches would add search
+  threads for little GPU gain.
+- Not measured: a real 40b×256 network. Tuning time grows with the network,
+  but each measurement is bounded to about 0.25 s, so the cost is dominated by
+  compiling the 8 graphs.
+
 ## Phase 2 step 2.5: fp16 and `--precision auto` (2026-10-03)
 
 Random nets, M4. fp16 means the residual tower runs in fp16; the 1×1 heads

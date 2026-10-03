@@ -404,9 +404,12 @@ TEST(PlatformTest, CoreCountsAreSane) {
 #include "MetalContext.h"
 #include "MetalNetwork.h"
 #include "MetalScheduler.h"
+#include "MetalTuning.h"
 #include "Network.h"
 
 #include <atomic>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 // GitHub's macOS runners are virtual machines and may have no usable Metal
@@ -725,5 +728,140 @@ TEST(MetalSchedulerTest, DrainReleasesWaitersAndResumeRestarts) {
     metal.forward(cases[0].in, pol, val);
     EXPECT_LE(max_diff(pol, cases[0].pol), 1e-4f);
     EXPECT_LE(max_diff(val, cases[0].val), 1e-4f);
+}
+
+// --- autotune: the chooser and the cache need no GPU ---
+
+using MetalTuning::Measurement;
+static Measurement S(const int batch, const double speed) {
+    return {MetalPrecision::Single, batch, speed};
+}
+static Measurement H(const int batch, const double speed) {
+    return {MetalPrecision::Half, batch, speed};
+}
+
+TEST(MetalTuningTest, ChoosesSmallestBatchWithinFivePercentOfTheBest) {
+    // Plateau from batch 16: 16 is within 5% of 32's best, 8 is not.
+    const std::vector<Measurement> m{S(8, 900),   S(16, 970), S(32, 1000),
+                                     S(64, 990),  H(8, 900),  H(16, 970),
+                                     H(32, 1000), H(64, 990)};
+    const auto single_only = MetalTuning::choose(m, true, false);
+    EXPECT_EQ(single_only.precision, MetalPrecision::Single);
+    EXPECT_EQ(single_only.batch, 16);
+    // Both allowed, equal speeds: fp16 is not 5% faster, so fp32 wins.
+    EXPECT_EQ(MetalTuning::choose(m, true, true).precision,
+              MetalPrecision::Single);
+}
+
+TEST(MetalTuningTest, HalfNeedsToBeAtLeastFivePercentFaster) {
+    const std::vector<Measurement> slower{S(8, 1000), H(8, 1049)};
+    EXPECT_EQ(MetalTuning::choose(slower, true, true).precision,
+              MetalPrecision::Single);
+    const std::vector<Measurement> faster{S(8, 1000), H(8, 1060)};
+    EXPECT_EQ(MetalTuning::choose(faster, true, true).precision,
+              MetalPrecision::Half);
+    // Each precision keeps its own best batch.
+    const std::vector<Measurement> mixed{S(8, 500),  S(16, 1000), H(8, 1500),
+                                         H(16, 1550)};
+    const auto c = MetalTuning::choose(mixed, true, true);
+    EXPECT_EQ(c.precision, MetalPrecision::Half);
+    EXPECT_EQ(c.batch, 8); // 1500 is within 5% of 1550
+}
+
+TEST(MetalTuningTest, HonorsTheAllowedPrecisions) {
+    const std::vector<Measurement> m{S(8, 1000), H(8, 2000)};
+    EXPECT_EQ(MetalTuning::choose(m, true, false).precision,
+              MetalPrecision::Single);
+    EXPECT_EQ(MetalTuning::choose(m, false, true).precision,
+              MetalPrecision::Half);
+    EXPECT_THROW(MetalTuning::choose(m, false, false), std::runtime_error);
+    EXPECT_THROW(MetalTuning::choose({}, true, true), std::runtime_error);
+    // Allowed but never measured.
+    EXPECT_THROW(MetalTuning::choose({S(8, 1000)}, false, true),
+                 std::runtime_error);
+}
+
+static std::string temp_file(const char* const name) {
+    const auto dir = std::filesystem::temp_directory_path()
+                     / ("lz-tuning-test-" + std::to_string(std::rand()));
+    std::filesystem::create_directories(dir);
+    return (dir / name).string();
+}
+
+TEST(MetalTuningTest, CacheRoundTripAndKeyIsolation) {
+    const auto path = temp_file("metal_tuning");
+    const MetalTuning::Cache cache(path);
+    const MetalTuning::Key a{"Apple M4", 192, 15};
+    const MetalTuning::Key b{"Apple M4", 256, 40};
+    const MetalTuning::Key other_device{"Apple M5", 192, 15};
+
+    std::vector<Measurement> out;
+    EXPECT_FALSE(cache.load(a, out)) << "no file yet";
+
+    ASSERT_TRUE(cache.store(a, {S(8, 357.4), H(8, 396.6)}));
+    ASSERT_TRUE(cache.store(b, {S(16, 120.0)}));
+    ASSERT_TRUE(cache.load(a, out));
+    ASSERT_EQ(out.size(), 2u);
+    EXPECT_EQ(out[0].precision, MetalPrecision::Single);
+    EXPECT_EQ(out[0].batch, 8);
+    EXPECT_NEAR(out[0].evals_per_sec, 357.4, 0.06);
+    EXPECT_EQ(out[1].precision, MetalPrecision::Half);
+    ASSERT_TRUE(cache.load(b, out));
+    EXPECT_EQ(out.size(), 1u);
+    EXPECT_FALSE(cache.load(other_device, out)) << "device is part of the key";
+
+    // Storing a key again replaces its rows and keeps the others.
+    ASSERT_TRUE(cache.store(a, {S(32, 400.0)}));
+    ASSERT_TRUE(cache.load(a, out));
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].batch, 32);
+    EXPECT_TRUE(cache.load(b, out)) << "other keys survive";
+    std::filesystem::remove_all(std::filesystem::path(path).parent_path());
+}
+
+TEST(MetalTuningTest, CacheToleratesGarbage) {
+    const auto path = temp_file("metal_tuning");
+    {
+        std::ofstream f(path);
+        f << "# some header\n"
+             "not a row\n"
+             "Apple M4\t192\t15\tsingle\t8\t350.0\n"
+             "Apple M4\t192\t15\thalf\tEIGHT\t400.0\n"   // bad number
+             "Apple M4\t192\t15\tquarter\t8\t400.0\n"     // bad precision
+             "Apple M4\t192\t15\thalf\t8\t-5\n"           // bad speed
+             "Apple M4\t192\t15\thalf\t16\t410.0\t\textra\n"
+             "Apple M4\t192\t15\thalf\t16\t410.0\n";
+    }
+    const MetalTuning::Cache cache(path);
+    std::vector<Measurement> out;
+    ASSERT_TRUE(cache.load({"Apple M4", 192, 15}, out));
+    EXPECT_EQ(out.size(), 2u) << "only the two well-formed rows";
+    // A directory that cannot be created is a quiet failure, not an exception.
+    const MetalTuning::Cache unwritable("/dev/null/nope/metal_tuning");
+    EXPECT_FALSE(unwritable.store({"Apple M4", 1, 1}, {S(8, 1.0)}));
+    std::filesystem::remove_all(std::filesystem::path(path).parent_path());
+}
+
+// The GPU part: every candidate batch size, both precisions, plausible numbers.
+TEST(MetalTuningTest, MeasuresEveryCandidateOnTheGpu) {
+    SKIP_WITHOUT_METAL();
+    constexpr auto C = 16;
+    constexpr auto blocks = 2;
+    std::mt19937 rng(5);
+    const auto weights = make_test_weights(C, blocks, rng);
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+
+    auto reports = 0;
+    const auto m = MetalTuning::measure(
+        *ctx, C, blocks, *weights, 2, 0.01,
+        [&reports](const std::vector<Measurement>&) { reports++; });
+    EXPECT_EQ(reports, 4) << "one progress report per batch size";
+    EXPECT_EQ(m.size(), 8u);
+    for (const auto& r : m) {
+        EXPECT_GT(r.evals_per_sec, 0.0);
+    }
+    EXPECT_NO_THROW(MetalTuning::choose(m, true, true));
 }
 #endif
