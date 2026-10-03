@@ -90,9 +90,9 @@ Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done
 
 | Step | Planned | Used | Status | Gates passed | Commit | Notes |
 |------|:-------:|:----:|:------:|--------------|--------|-------|
-| 1.1 | M | Sonnet 5.5 | ✅ | ctest (new `PlatformTest`), ASan+UBSan clean | `COMMIT` | `src/Platform.h`; shipped together with 1.2 and 1.3 |
-| 1.2 | L | Sonnet 5.5 | ✅ | G1 3.7e-7 vs pre-1.4 build, ASan clean | `COMMIT` | Done by Sonnet, not Haiku, because it was bundled with 1.1/1.3. Startup log `BLAS Core: Apple Accelerate (SME)` |
-| 1.3 | M | Sonnet 5.5 | ✅ | ctest, ASan clean | `COMMIT` | QoS on search threads + P/E core log. The spec's `-t 7` default was measured and **not adopted** (no throughput gain) |
+| 1.1 | M | Sonnet 5.5 | ✅ | ctest (new `PlatformTest`), ASan+UBSan clean | `7fafb4b` | `src/Platform.h`; shipped together with 1.2 and 1.3 |
+| 1.2 | L | Sonnet 5.5 | ✅ | G1 3.7e-7 vs pre-1.4 build, ASan clean | `7fafb4b` | Done by Sonnet, not Haiku, because it was bundled with 1.1/1.3. Startup log `BLAS Core: Apple Accelerate (SME)` |
+| 1.3 | M | Sonnet 5.5 | ✅ | ctest, ASan clean | `7fafb4b` | QoS on search threads + P/E core log. The spec's `-t 7` default was measured and **not adopted** (no throughput gain) |
 | 1.4a | S | Opus 5.5 | ✅ | ctest, G1 vs pre-change 3.7e-7 and vs Eigen 3.4e-7, scalar (MSVC) fallback G1 3.0e-9, ASan+UBSan clean, x86-64 SSE compile | `004f7d6` | 1.26× single-thread, 1.13× at 10 threads (random 15b×192). Now store-bound; a `[tile][channel]` V layout was tried and was 9% slower (see BENCHMARKS.md) |
 | 1.4b | M | Sonnet 5.5 | ✅ | ctest, G1 vs pre-1.4 build 3.7e-7 and vs Eigen 3.4e-7, ASan+UBSan clean | `aec4bd0` | Speed-neutral (±1%); kept for less memory traffic and one fewer duplicate function |
 | 1.5 | L | | ⬜ | | | |
