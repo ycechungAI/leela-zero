@@ -10,12 +10,13 @@ LZ_DATA_DIR="${LZ_DATA_DIR:-$HOME/.local/share/leela-zero}"   # where leelaz loo
 # Build directories, one per configuration (see build.sh).
 build_dir_for() {
     case "$1" in
+        metal)  echo "$REPO_ROOT/build-metal" ;;
         cpu)    echo "$REPO_ROOT/build" ;;
         opencl) echo "$REPO_ROOT/build-opencl" ;;
         debug)  echo "$REPO_ROOT/build-debug" ;;
         asan)   echo "$REPO_ROOT/build-asan" ;;
         dist)   echo "$REPO_ROOT/build-dist" ;;
-        *)      die "unknown build config '$1' (expected cpu|opencl|debug|asan|dist)" ;;
+        *)      die "unknown build config '$1' (expected metal|cpu|opencl|debug|asan|dist)" ;;
     esac
 }
 

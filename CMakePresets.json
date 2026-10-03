@@ -55,11 +55,12 @@
     },
     {
       "name": "macos-dist",
-      "displayName": "macOS: CPU only, redistributable (-mcpu=apple-m1)",
+      "displayName": "macOS: Metal + CPU, redistributable (-mcpu=apple-m1)",
       "inherits": "base",
       "binaryDir": "${sourceDir}/build-dist",
       "cacheVariables": {
         "USE_CPU_ONLY": "ON",
+        "USE_METAL": "ON",
         "LZ_NATIVE_ARCH": "OFF"
       },
       "condition": {

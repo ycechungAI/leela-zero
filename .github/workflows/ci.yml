@@ -112,7 +112,7 @@ jobs:
           python3 scripts/macos/selfplay.py --leelaz build-metal/leelaz -w net.txt \
               -o positions -n 1 -v 2
           python3 scripts/parity/compare_backends.py \
-              --ref "build-metal/leelaz --cpu-only" --test build-metal/leelaz \
+              --ref "build-metal/leelaz --backend cpu" --test build-metal/leelaz \
               -w net.txt --sgf 'positions/*.sgf' --moves 0,10,60,200 --tol 1e-4
 
   linux-cpu:

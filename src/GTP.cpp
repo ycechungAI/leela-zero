@@ -100,7 +100,7 @@ FILE* cfg_logfile_handle;
 bool cfg_quiet;
 std::string cfg_options_str;
 bool cfg_benchmark;
-bool cfg_cpu_only;
+backend_t cfg_backend;
 AnalyzeTags cfg_analyze_tags;
 
 /* Parses tags for the lz-analyze GTP command and friends */
@@ -318,6 +318,65 @@ void GTP::initialize(std::unique_ptr<Network>&& net) {
     myprintf("%s\n", message.c_str());
 }
 
+bool backend_available(const backend_t backend) {
+    switch (backend) {
+    case backend_t::CPU:
+        return true;
+    case backend_t::OPENCL:
+#ifdef USE_OPENCL
+        return true;
+#else
+        return false;
+#endif
+    case backend_t::METAL:
+#ifdef USE_METAL
+        return true;
+#else
+        return false;
+#endif
+    case backend_t::AUTO:
+        return true;
+    }
+    return false;
+}
+
+backend_t default_backend() {
+    // Metal is the Apple Silicon default; OpenCL is deprecated on macOS.
+    if (backend_available(backend_t::METAL)) {
+        return backend_t::METAL;
+    }
+    if (backend_available(backend_t::OPENCL)) {
+        return backend_t::OPENCL;
+    }
+    return backend_t::CPU;
+}
+
+const char* backend_name(const backend_t backend) {
+    switch (backend) {
+    case backend_t::CPU:
+        return "cpu";
+    case backend_t::OPENCL:
+        return "opencl";
+    case backend_t::METAL:
+        return "metal";
+    case backend_t::AUTO:
+        return "auto";
+    }
+    return "?";
+}
+
+std::string available_backends() {
+    std::string names;
+    for (const auto backend :
+         {backend_t::METAL, backend_t::OPENCL, backend_t::CPU}) {
+        if (backend_available(backend)) {
+            names += (names.empty() ? "" : ", ");
+            names += backend_name(backend);
+        }
+    }
+    return names;
+}
+
 void GTP::setup_default_parameters() {
     cfg_gtp_mode = false;
     cfg_allow_pondering = true;
@@ -364,11 +423,7 @@ void GTP::setup_default_parameters() {
     cfg_logfile_handle = nullptr;
     cfg_quiet = false;
     cfg_benchmark = false;
-#if defined(USE_CPU_ONLY) && !defined(USE_METAL)
-    cfg_cpu_only = true;
-#else
-    cfg_cpu_only = false;
-#endif
+    cfg_backend = backend_t::AUTO;
 
     cfg_analyze_tags = AnalyzeTags{};
 

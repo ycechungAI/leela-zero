@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 # Build leelaz + unit tests on Apple Silicon.
 #
-#   scripts/macos/build.sh [cpu|opencl|debug|asan|dist] [--clean] [--no-test]
+#   scripts/macos/build.sh [metal|cpu|opencl|debug|asan|dist] [--clean] [--no-test]
 #
-#   cpu     Release, CPU only, Accelerate BLAS (default)
+#   metal   Release, Metal GPU backend + CPU fallback (default)
+#   cpu     Release, CPU only, Accelerate BLAS
 #   opencl  Release, OpenCL GPU backend (deprecated on macOS; perf baseline)
 #   debug   Debug (-Og -g), CPU only, for lldb
 #   asan    Debug + AddressSanitizer/UBSan, CPU only
-#   dist    Release, CPU only, -mcpu=apple-m1 (runs on any Apple Silicon Mac)
+#   dist    Release, Metal + CPU, -mcpu=apple-m1 (runs on any Apple Silicon Mac)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 require_macos_arm64
 
-CFG="cpu"; CLEAN=0; RUN_TESTS=1
+CFG="metal"; CLEAN=0; RUN_TESTS=1
 for arg in "$@"; do
     case "$arg" in
-        cpu|opencl|debug|asan|dist) CFG="$arg" ;;
+        metal|cpu|opencl|debug|asan|dist) CFG="$arg" ;;
         --clean)   CLEAN=1 ;;
         --no-test) RUN_TESTS=0 ;;
-        -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
         *) die "unknown argument: $arg" ;;
     esac
 done

@@ -70,6 +70,48 @@ static void license_blurb() {
         PROGRAM_VERSION);
 }
 
+// Resolve --backend / --cpu-only into cfg_backend.
+static void select_backend(boost::program_options::variables_map& vm) {
+    auto backend = backend_t::AUTO;
+    if (vm.count("backend")) {
+        const auto name = vm["backend"].as<std::string>();
+        if (name == "auto") {
+            backend = backend_t::AUTO;
+        } else if (name == "cpu") {
+            backend = backend_t::CPU;
+        } else if (name == "metal") {
+            backend = backend_t::METAL;
+        } else if (name == "opencl") {
+            backend = backend_t::OPENCL;
+        } else {
+            printf("Unexpected option for --backend, expecting auto/cpu/metal/opencl\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    if (vm.count("cpu-only")) {
+        if (backend != backend_t::AUTO && backend != backend_t::CPU) {
+            printf("--cpu-only conflicts with --backend %s\n",
+                   backend_name(backend));
+            exit(EXIT_FAILURE);
+        }
+        backend = backend_t::CPU;
+    }
+    if (backend == backend_t::AUTO) {
+        backend = default_backend();
+    }
+    if (!backend_available(backend)) {
+        printf("This build has no %s backend (available: %s).\n",
+               backend_name(backend), available_backends().c_str());
+        exit(EXIT_FAILURE);
+    }
+#ifdef USE_OPENCL
+    if (backend == backend_t::METAL && vm.count("gpu")) {
+        printf("Ignoring --gpu: Metal uses the system GPU.\n");
+    }
+#endif
+    cfg_backend = backend;
+}
+
 static void calculate_thread_count_cpu(
     boost::program_options::variables_map& vm) {
     // If we are CPU-based, there is no point using more than the number of CPUs.
@@ -173,9 +215,10 @@ static void parse_commandline(const int argc, const char* const argv[]) {
         ("noponder", "Disable thinking on opponent's time.")
         ("benchmark", "Test network and exit. Default args:\n-v3200 --noponder "
                       "-m0 -t1 -s1.")
-#if !defined(USE_CPU_ONLY) || defined(USE_METAL)
-        ("cpu-only", "Use CPU-only implementation and do not use the GPU.")
-#endif
+        ("backend", po::value<std::string>(),
+                    "Compute backend: auto, cpu, metal or opencl, if built in.\n"
+                    "Default is auto: Metal, else OpenCL, else CPU.")
+        ("cpu-only", "Same as --backend cpu.")
         ;
 #if defined(USE_OPENCL) || defined(USE_METAL)
     po::options_description gpu_desc("GPU options");
@@ -368,22 +411,18 @@ static void parse_commandline(const int argc, const char* const argv[]) {
 #endif
 #endif
 #endif
-#if !defined(USE_CPU_ONLY) || defined(USE_METAL)
-    if (vm.count("cpu-only")) {
-        cfg_cpu_only = true;
-    }
-#else
-    cfg_cpu_only = true;
-#endif
+    select_backend(vm);
 
-    if (cfg_cpu_only) {
+    if (cfg_backend == backend_t::CPU) {
         calculate_thread_count_cpu(vm);
-    } else {
-#if defined(USE_METAL)
+#ifdef USE_METAL
+    } else if (cfg_backend == backend_t::METAL) {
         calculate_thread_count_gpu(vm, MetalScheduler::DEFAULT_WORKERS,
                                    METAL_DEFAULT_BATCH);
         myprintf("Using Metal batch size of %d\n", cfg_batch_size);
-#elif defined(USE_OPENCL)
+#endif
+#ifdef USE_OPENCL
+    } else if (cfg_backend == backend_t::OPENCL) {
         const auto gpu_count = std::max(cfg_gpus.size(), size_t{1});
         calculate_thread_count_gpu(vm, gpu_count * 2, 5);
         myprintf("Using OpenCL batch size of %d\n", cfg_batch_size);

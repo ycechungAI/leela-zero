@@ -123,7 +123,15 @@ extern FILE* cfg_logfile_handle;
 extern bool cfg_quiet;
 extern std::string cfg_options_str;
 extern bool cfg_benchmark;
-extern bool cfg_cpu_only;
+// Compute backend. AUTO means the best one this build supports; Leela.cpp
+// resolves it at startup (Network::initialize does too, for the tests).
+enum class backend_t { AUTO, CPU, OPENCL, METAL };
+extern backend_t cfg_backend;
+bool backend_available(backend_t backend);
+backend_t default_backend();
+const char* backend_name(backend_t backend);
+// "cpu, metal" etc., the backends compiled into this build.
+std::string available_backends();
 extern AnalyzeTags cfg_analyze_tags;
 
 static constexpr size_t MiB = 1024LL * 1024LL;

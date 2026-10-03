@@ -682,11 +682,16 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
         m_fwd_weights->m_conv_pol_b[i] = 0.0f;
     }
 
-#if defined(USE_METAL)
-    if (cfg_cpu_only) {
+    // Metal and OpenCL are only tried if built in; cfg_backend is resolved by
+    // Leela.cpp, and AUTO (the unit tests) means the build's best backend.
+    const auto backend =
+        cfg_backend == backend_t::AUTO ? default_backend() : cfg_backend;
+    if (backend == backend_t::CPU) {
         myprintf("Initializing CPU-only evaluation.\n");
         m_forward = init_net(channels, std::make_unique<CPUPipe>());
-    } else {
+    }
+#ifdef USE_METAL
+    else if (backend == backend_t::METAL) {
         try {
 #ifdef USE_GPU_SELFCHECK
             // CPU reference first, so Metal can be checked against it.
@@ -698,11 +703,9 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
             m_forward = init_net(channels, std::make_unique<CPUPipe>());
         }
     }
-#elif defined(USE_OPENCL)
-    if (cfg_cpu_only) {
-        myprintf("Initializing CPU-only evaluation.\n");
-        m_forward = init_net(channels, std::make_unique<CPUPipe>());
-    } else {
+#endif
+#ifdef USE_OPENCL
+    else if (backend == backend_t::OPENCL) {
 #ifdef USE_GPU_SELFCHECK
         // initialize CPU reference first, so that we can self-check
         // when doing fp16 vs. fp32 detections
@@ -718,10 +721,6 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
             init_net(channels, std::make_unique<OpenCLScheduler<float>>());
 #endif
     }
-
-#else // !USE_OPENCL
-    myprintf("Initializing CPU-only evaluation.\n");
-    m_forward = init_net(channels, std::make_unique<CPUPipe>());
 #endif
 
     // Need to estimate size before clearing up the pipe.

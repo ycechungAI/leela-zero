@@ -28,8 +28,9 @@ scripts/macos/debug.sh smoke
 ```
 
 `build.sh` initializes the submodules (Eigen, googletest) if needed, builds
-`build/leelaz` and `build/tests`, and runs the tests. A good run ends with
-`[  PASSED  ] 13 tests.`
+the Metal configuration (`build-metal/leelaz` and `build-metal/tests`), and
+runs the tests. A good run ends with `[  PASSED  ]`. The engine uses the GPU
+by default; `--backend cpu` (or `build.sh cpu`) is the CPU-only fallback.
 
 ## 2. Scripts
 
@@ -37,8 +38,8 @@ Everything lives in `scripts/macos/`. Pass `-h` to any script for its usage.
 
 | Script | Purpose |
 |--------|---------|
-| `build.sh [cpu\|opencl\|debug\|asan\|dist] [--clean] [--no-test]` | Configure, build and test one configuration |
-| `start.sh [-w net] [-b cpu\|opencl] [-t threads] [-v visits] [-- leelaz args]` | Run `leelaz` in GTP mode, for GUIs or by hand |
+| `build.sh [metal\|cpu\|opencl\|debug\|asan\|dist] [--clean] [--no-test]` | Configure, build and test one configuration (default: `metal`) |
+| `start.sh [-w net] [-b metal\|cpu\|opencl] [-t threads] [-v visits] [-- leelaz args]` | Run `leelaz` in GTP mode, for GUIs or by hand (default backend: `metal`) |
 | `debug.sh lldb\|asan\|tests\|smoke` | Debugger, sanitizers, unit tests under lldb, quick smoke test |
 | `train.sh selfplay\|sgf\|split\|fit` | Training-data workflow (section 6) |
 | `make_random_net.py out.txt` | Writes a random-weights network for tests (it plays nonsense) |
@@ -48,11 +49,12 @@ Each configuration gets its own build directory, so they don't clobber each othe
 
 | Config | Directory | Notes |
 |--------|-----------|-------|
-| `cpu` (default) | `build/` | Release, LTO, `-mcpu=native`, Accelerate BLAS. **Use this one** |
+| `metal` (default) | `build-metal/` | Release, LTO, `-mcpu=native`. Metal GPU backend with the Accelerate CPU backend as fallback. **Use this one** |
+| `cpu` | `build/` | Release, CPU only, Accelerate BLAS. The reference for parity checks |
 | `opencl` | `build-opencl/` | Release, OpenCL GPU backend. Deprecated by Apple; kept as the speed baseline |
 | `debug` | `build-debug/` | `-Og -g`, no LTO, for lldb |
 | `asan` | `build-asan/` | Debug + AddressSanitizer + UBSan |
-| `dist` | `build-dist/` | Release with `-mcpu=apple-m1` instead of `native`, so the binary runs on any Apple Silicon Mac. Use it for binaries you hand to others |
+| `dist` | `build-dist/` | Metal + CPU, with `-mcpu=apple-m1` instead of `native`, so the binary runs on any Apple Silicon Mac. Use it for binaries you hand to others |
 
 Generated data goes in `data/` and logs go in `logs/`. Git ignores both.
 
@@ -144,7 +146,8 @@ Lizzie needs `-g` (`--gtp`) and works best with pondering left on.
 | `--timemanage off` | Use the full visit budget every move |
 | `--benchmark` | Fixed-workload speed test, then exit (`start.sh -- --benchmark`) |
 | `-l file` | Log file. `start.sh` always writes `logs/leelaz-<time>.log` |
-| `--cpu-only` | In a GPU build (Metal or OpenCL), skip the GPU |
+| `--backend auto\|metal\|opencl\|cpu` | Compute backend; `auto` (default) is Metal, else OpenCL, else CPU, among those built in. Naming one that is not built in is an error that lists what is |
+| `--cpu-only` | Same as `--backend cpu` |
 | `--precision auto\|single\|half` | Metal and OpenCL: network precision. `auto` (default) picks fp16 only if it is faster and accurate (Metal: ≥ 5% faster, within the N6 tolerances) |
 | `--batchsize N` | Metal and OpenCL: max evaluations per GPU batch (0 = default; Metal: 8, with 16 search threads) |
 | `--tune-only` | OpenCL: run the kernel tuner and exit |
