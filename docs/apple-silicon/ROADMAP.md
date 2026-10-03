@@ -34,12 +34,13 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 
 > Which model does each step, and the tracking log: [10-model-plan.md](10-model-plan.md).
 
-1. `src/Platform.h`: core counts, QoS, and feature detection.
-2. Accelerate as the default BLAS, single-threaded per call, with a startup log line.
-3. Default `-t` and QoS for P/E cores.
+1. ✅ `src/Platform.h`: core counts, QoS, and feature detection.
+2. ✅ Accelerate as the default BLAS, single-threaded per call, with a startup log line.
+3. ✅ QoS for search threads and a P/E core log line. A reduced default `-t` was
+   measured and not adopted (no gain).
 4. ✅ NEON-friendly Winograd transforms (1.26× single-thread on a random
    15b×192) and a fused BN+ReLU+residual pass (speed-neutral, simpler).
-5. Gate G1 + benchmark.
+5. 🟡 Gate G1 passes. The official benchmark needs real networks (deferred).
 
 **Exit:** ≥1.5× Eigen on 15b×192, and G1 passes. Tag `as.1`.
 

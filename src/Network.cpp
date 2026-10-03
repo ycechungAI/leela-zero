@@ -69,6 +69,7 @@
 #include "Random.h"
 #include "ThreadPool.h"
 #include "Timing.h"
+#include "Platform.h"
 #include "Utils.h"
 
 namespace x3 = boost::spirit::x3;
@@ -494,7 +495,16 @@ void Network::select_precision(const int channels) {
 
 void Network::initialize(const int playouts, const std::string& weightsfile) {
 #ifdef USE_BLAS
-#ifndef __APPLE__
+#ifdef __APPLE__
+    // Search threads provide the parallelism; keep each sgemm on its own
+    // thread, like openblas_set_num_threads(1) below.
+    if (__builtin_available(macOS 15.0, *)) {
+        BLASSetThreading(BLAS_THREADING_SINGLE_THREADED);
+    }
+    const auto feature = Platform::cpu_feature_string();
+    myprintf("BLAS Core: Apple Accelerate%s.\n",
+             feature.empty() ? "" : (" (" + feature + ")").c_str());
+#else
 #ifdef USE_OPENBLAS
     openblas_set_num_threads(1);
     myprintf("BLAS Core: %s\n", openblas_get_corename());

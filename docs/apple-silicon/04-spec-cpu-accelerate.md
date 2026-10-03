@@ -29,7 +29,7 @@ does not link it correctly (B3).
 | C3 | Startup log line | `BLAS Core: Apple Accelerate (SME)` or `(AMX)`, detected with `sysctlbyname("hw.optional.arm.FEAT_SME")` |
 | C4 | Winograd transforms vectorized | Rewrite `winograd_transform_in/out` inner loops so clang auto-vectorizes them to NEON. Check with `-Rpass=loop-vectorize`. Fallback: explicit `<arm_neon.h>` behind `__ARM_NEON`. Expected gain is 10–20% on small nets, where transforms are a large share of the time |
 | C5 | BN+ReLU+residual fused pass | Today these run as separate passes over memory. One fused loop cuts memory traffic. The change is mechanical and backend-independent |
-| C6 | Default thread count | `cfg_num_threads` default on Apple = `hw.perflevel0.physicalcpu + hw.perflevel1.physicalcpu / 2` (=7 on the base M4) instead of `hardware_concurrency()` (=10), because E-cores slow the MCTS tail. The value stays tunable via `-t` |
+| C6 | Default thread count (**measured, not adopted**: `-t 7` was no faster than `-t 10` in nodes/s, see BENCHMARKS.md; the default stays at all logical CPUs and the startup log reports the P/E split) | `cfg_num_threads` default on Apple = `hw.perflevel0.physicalcpu + hw.perflevel1.physicalcpu / 2` (=7 on the base M4) instead of `hardware_concurrency()` (=10), because E-cores slow the MCTS tail. The value stays tunable via `-t` |
 | C7 | QoS | Search threads call `pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)` so the scheduler favors P-cores |
 | C8 | Optional fp16 CPU path | **Deferred.** The M4 CPU supports FP16 arithmetic, but the Accelerate sgemm path is fp32. Revisit only if the CPU becomes a release target for strength play |
 

@@ -76,6 +76,28 @@ transforms. Kept because it removes a full read/write sweep of each layer's
 output and deletes the duplicate `batchnorm` template from `CPUPipe.cpp`.
 Parity unchanged (G1 vs pre-1.4 build: 3.7e-7 on 15b×192).
 
+## Phase 1 steps 1.1–1.3: threads, QoS, Accelerate threading (2026-10-03)
+
+Random nets, M4 (4P + 6E), `--benchmark`, interleaved runs, n/s.
+
+Thread-count sweep (4 runs each, medians; Accelerate BLAS):
+
+| Network | `-t 4` | `-t 6` | `-t 7` | `-t 8` | `-t 10` (default) |
+|---------|-------:|-------:|-------:|-------:|------------------:|
+| random 15b×192 | 170 | 192 | 201 | 193 | 201 |
+| random 6b×64 | 2,515 | 2,500 | 2,950 | 2,915 | 3,055 |
+
+- The spec's proposed default of `perf + eff/2 = 7` threads gave no gain in
+  throughput, so **the default stays at all logical CPUs**. (Spec C6 predicted
+  E-cores would hurt the MCTS tail; that is a latency effect this throughput
+  benchmark does not measure. Revisit with a fixed-time strength test.)
+- `pthread_set_qos_class_self_np(USER_INTERACTIVE)` on search threads
+  (5 runs, default threads): 15b×192 median 207 vs 203; 6b×64 3,246 vs 3,181.
+  Neutral within noise; kept as a harmless scheduling hint.
+- `BLASSetThreading(SINGLE_THREADED)` (macOS 15+): 15b×192 205 vs 190, 6b×64
+  3,451 vs 3,299 (medians of 5). Small gain, within noise; kept to match the
+  OpenBLAS/MKL behaviour of one BLAS thread per search thread.
+
 ## Numerical parity
 
 | Gate | Compared | Network / positions | max abs Δ prior | max abs Δ winrate | Result |

@@ -41,6 +41,7 @@
 #include "GTP.h"
 #include "GameState.h"
 #include "NNCache.h"
+#include "Platform.h"
 #include "Random.h"
 #include "ThreadPool.h"
 #include "Utils.h"
@@ -382,4 +383,15 @@ TEST_F(LeelaTest, AnalyzeParseMinmoves) {
         std::sregex_iterator(result.first.begin(), result.first.end(), prior_re),
         std::sregex_iterator());
     EXPECT_GE(priors, 5) << result.first;
+}
+
+TEST(PlatformTest, CoreCountsAreSane) {
+    EXPECT_GE(Platform::num_perf_cores(), 1u);
+    // Performance + efficiency cores never exceed the logical CPUs.
+    EXPECT_LE(Platform::num_perf_cores() + Platform::num_eff_cores(),
+              Platform::num_cpus());
+#ifndef __APPLE__
+    EXPECT_EQ(Platform::num_eff_cores(), 0u);
+    EXPECT_FALSE(Platform::set_thread_qos_interactive());
+#endif
 }

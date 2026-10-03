@@ -45,6 +45,7 @@
 #include "GameState.h"
 #include "NNCache.h"
 #include "Network.h"
+#include "Platform.h"
 #include "Random.h"
 #include "ThreadPool.h"
 #include "Utils.h"
@@ -371,7 +372,13 @@ static void parse_commandline(const int argc, const char* const argv[]) {
         myprintf("Using OpenCL batch size of %d\n", cfg_batch_size);
 #endif
     }
-    myprintf("Using %d thread(s).\n", cfg_num_threads);
+    if (Platform::num_eff_cores() > 0) {
+        myprintf("Using %d thread(s) (%d performance + %d efficiency cores).\n",
+                 cfg_num_threads, Platform::num_perf_cores(),
+                 Platform::num_eff_cores());
+    } else {
+        myprintf("Using %d thread(s).\n", cfg_num_threads);
+    }
 
     if (vm.count("seed")) {
         cfg_rng_seed = vm["seed"].as<std::uint64_t>();
@@ -502,7 +509,12 @@ static void initialize_network() {
 
 // Setup global objects after command line has been parsed
 void init_global_objects() {
-    thread_pool.initialize(cfg_num_threads);
+    // Search threads ask for performance cores (a no-op off Apple Silicon).
+    for (auto i = size_t{0}; i < cfg_num_threads; i++) {
+        thread_pool.add_thread([]() { Platform::set_thread_qos_interactive(); });
+    }
+    // The main thread also searches.
+    Platform::set_thread_qos_interactive();
 
     // Use deterministic random numbers for hashing
     auto rng = std::make_unique<Random>(5489);
