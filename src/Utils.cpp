@@ -84,19 +84,26 @@ bool Utils::input_pending() {
     select(1, &read_fds, nullptr, nullptr, &timeout);
     return FD_ISSET(0, &read_fds);
 #else
-    static int init = 0, pipe;
+    static int init = 0, pipe, console;
     static HANDLE inh;
     DWORD dw;
 
     if (!init) {
         init = 1;
         inh = GetStdHandle(STD_INPUT_HANDLE);
-        pipe = !GetConsoleMode(inh, &dw);
-        if (!pipe) {
+        console = GetConsoleMode(inh, &dw);
+        pipe = !console && GetFileType(inh) == FILE_TYPE_PIPE;
+        if (console) {
             SetConsoleMode(inh,
                            dw & ~(ENABLE_MOUSE_INPUT | ENABLE_WINDOW_INPUT));
             FlushConsoleInputBuffer(inh);
         }
+    }
+
+    if (!console && !pipe) {
+        // A file or the NUL device: always readable, as select() reports
+        // on POSIX. Peeking it as a pipe would fail and exit the engine.
+        return true;
     }
 
     if (pipe) {
