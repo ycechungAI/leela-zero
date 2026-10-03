@@ -79,6 +79,9 @@ using vecf = float;
 #endif
 constexpr auto VEC_LANES = int{sizeof(vecf) / sizeof(float)};
 
+// Side of the zero-padded input plane: one border cell plus the tiles' overhang.
+constexpr auto PAD_W = 2 + WINOGRAD_M * WINOGRAD_WTILES;
+
 // Unaligned load/store between T and VEC_LANES-wide float runs. The memcpy
 // compiles to a single vector load/store.
 template <typename T>
@@ -214,13 +217,11 @@ void CPUPipe::winograd_transform_in(const std::vector<float>& in,
     constexpr auto P = WINOGRAD_P;
     constexpr auto lanes = VEC_LANES;
 
-    constexpr auto Wpad = 2 + WINOGRAD_M * WTILES;
-
     // Padded input of `lanes` channels, interleaved so that one vecf holds
     // the same point of every channel. The border stays zero.
-    std::array<float, Wpad * Wpad * lanes> in_pad{};
+    std::array<float, PAD_W * PAD_W * lanes> in_pad{};
     const auto pad = [&in_pad](const int y, const int x) {
-        return &in_pad[(y * Wpad + x) * lanes];
+        return &in_pad[(y * PAD_W + x) * VEC_LANES];
     };
 
     // Vectorized across channels: each pass transforms channels
