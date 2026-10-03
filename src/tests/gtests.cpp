@@ -434,7 +434,11 @@ TEST(MetalContextTest, DeviceAndSelfTest) {
     ASSERT_NE(ctx, nullptr) << error;
     EXPECT_FALSE(ctx->device_name().empty());
     EXPECT_TRUE(ctx->has_unified_memory());
-    EXPECT_TRUE(ctx->supports_apple_gpu_family());
+    // Informational: GitHub's virtualized runners report an "Apple
+    // Paravirtual device" that is not in an Apple GPU family, yet runs the
+    // MPSGraph network correctly. Nothing requires the family yet.
+    std::cout << "Apple GPU family (Apple7+): "
+              << (ctx->supports_apple_gpu_family() ? "yes" : "no") << std::endl;
     EXPECT_GE(ctx->max_threads_per_threadgroup(), 256u);
     std::cout << ctx->describe() << std::endl;
 
