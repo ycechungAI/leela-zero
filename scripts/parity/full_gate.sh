@@ -32,7 +32,7 @@ if [[ -z "$WORK" ]]; then WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT; fi
 mkdir -p "$WORK/positions"
 
 # 20 positions per game: after moves 0, 10, ..., 190.
-MOVES="$(seq -s, 0 10 190)"
+MOVES="$(seq 0 10 190 | paste -sd, -)"   # BSD seq -s, leaves a trailing comma
 
 FAILED=0
 SUMMARY=""
