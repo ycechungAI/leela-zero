@@ -26,6 +26,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -139,6 +140,22 @@ public:
 private:
     int m_saved = -1;
 };
+
+// Set by an atexit handler once the Neural Engine has been used. MPSGraph's
+// ANE support creates static objects (among them a mutex) on first use, and
+// exit() destroys them before an engine-lifetime static such as the Network,
+// so releasing an ANE executable during exit() locks a destroyed mutex and
+// aborts. The handler is registered after those statics exist, so it runs
+// before they are destroyed; from then on executables are leaked, and the OS
+// reclaims them with the process.
+std::atomic<bool> g_exiting{false};
+
+void register_exit_handler() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::atexit([] { g_exiting = true; });
+    });
+}
 
 struct Compiled {
     MPSGraphExecutable* exe = nil;
@@ -312,8 +329,8 @@ MetalNetwork::MetalNetwork(const MetalContext& ctx, const int channels,
         if (use_ane) {
             Utils::myprintf_error(
                 "Compiling the network for the Neural Engine; this takes "
-                "several minutes the first time (the system caches the "
-                "result).\n");
+                "several minutes the first time for each network and batch "
+                "size (later starts reuse the system's cache).\n");
         }
         const auto start = std::chrono::steady_clock::now();
         {
@@ -347,11 +364,17 @@ MetalNetwork::MetalNetwork(const MetalContext& ctx, const int channels,
                 std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - start)
                     .count());
+            register_exit_handler();
         }
     }
 }
 
-MetalNetwork::~MetalNetwork() = default;
+MetalNetwork::~MetalNetwork() {
+    if (g_exiting) {
+        // See g_exiting: keep the executables alive past exit().
+        new std::map<int, Compiled>(std::move(m_impl->graphs));
+    }
+}
 
 std::unique_ptr<MetalSlot> MetalNetwork::make_slot(const int batch) const {
     if (m_impl->graphs.count(batch) == 0) {

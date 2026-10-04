@@ -623,16 +623,19 @@ TEST(MetalNetworkTest, HalfPrecisionIsCloseToCpu) {
 }
 
 // The Neural Engine compiles lazily; the constructor must do it all up front,
-// keep stdout clean, and give results within fp16 tolerance. Compiling a graph
-// for a network the system has not seen takes a long time even when small, so
-// this only runs with LZ_TEST_ANE=1.
+// keep stdout clean, and give results within fp16 tolerance. MPSGraph places
+// nothing on the ANE for small towers (32x3, 64x3 and 128x3 gave results
+// identical to fp16 on the GPU on an M4), so this uses 128x6, which it does
+// place; the test checks that, so it cannot pass on the GPU by accident.
+// The first compile on a machine can be slow, so it only runs with
+// LZ_TEST_ANE=1.
 TEST(MetalNetworkTest, NeuralEngineIsCloseToCpuAndKeepsStdoutClean) {
     SKIP_WITHOUT_METAL();
     if (std::getenv("LZ_TEST_ANE") == nullptr) {
         GTEST_SKIP() << "set LZ_TEST_ANE=1 (compiles for the Neural Engine)";
     }
-    constexpr auto C = 32;
-    constexpr auto blocks = 3;
+    constexpr auto C = 128;
+    constexpr auto blocks = 6;
     constexpr auto N = 4;
     constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
     std::mt19937 rng(4321);
@@ -642,6 +645,7 @@ TEST(MetalNetworkTest, NeuralEngineIsCloseToCpuAndKeepsStdoutClean) {
     std::string error;
     const auto ctx = MetalContext::create(error);
     ASSERT_NE(ctx, nullptr) << error;
+    MetalNetwork gpu(*ctx, C, blocks, *weights, {N}, MetalPrecision::Half);
 
     testing::internal::CaptureStdout();
     std::unique_ptr<MetalNetwork> ane;
@@ -659,6 +663,11 @@ TEST(MetalNetworkTest, NeuralEngineIsCloseToCpuAndKeepsStdoutClean) {
     std::vector<float> pol(N * Network::OUTPUTS_POLICY * plane);
     std::vector<float> val(N * Network::OUTPUTS_VALUE * plane);
     ane->forward(in.data(), N, pol.data(), val.data());
+    std::vector<float> gpu_pol(pol.size()), gpu_val(val.size());
+    gpu.forward(in.data(), N, gpu_pol.data(), gpu_val.data());
+    const auto vs_gpu = std::max(max_diff(pol, gpu_pol), max_diff(val, gpu_val));
+    std::cout << "ANE vs GPU fp16 max diff " << vs_gpu << std::endl;
+    EXPECT_GT(vs_gpu, 0.0f) << "identical to the GPU: not placed on the ANE";
     auto worst = 0.0f, scale = 0.0f;
     for (auto i = 0; i < N; i++) {
         for (auto j = 0; j < Network::OUTPUTS_POLICY * plane; j++) {
