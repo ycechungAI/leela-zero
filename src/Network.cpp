@@ -533,6 +533,12 @@ std::vector<GameState> metal_check_positions() {
 //    positions through the whole head pipeline) and the measurements say it is
 //    at least 5% faster; with a user-fixed batch size there are no cached
 //    measurements, so both precisions are timed right here.
+//    With --ane the fp16 pipe runs on the Neural Engine; its graphs are
+//    compiled (minutes the first time) and warmed up inside the constructor,
+//    so no compile ever happens during a search. The accuracy check always
+//    runs for the Neural Engine, even with --precision half: if it fails,
+//    fp16 falls back to the GPU (--precision half) or fp32 (auto). The tuning
+//    cache keeps separate rows for the Neural Engine.
 std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
     const auto blocks =
         static_cast<int>((m_fwd_weights->m_conv_weights.size() - 1) / 2);
@@ -545,7 +551,8 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         if (!context) {
             throw std::runtime_error("Metal: " + error);
         }
-        const MetalTuning::Key key{context->device_name(), channels, blocks};
+        const MetalTuning::Key key{context->device_name(), channels, blocks,
+                                   cfg_ane};
         const MetalTuning::Cache cache(MetalTuning::Cache::default_path());
         std::vector<MetalTuning::Measurement> table;
         const auto shape = key.device + ", " + std::to_string(channels)
@@ -557,11 +564,12 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
                      shape.c_str());
             print_table = false;
         } else {
-            myprintf("Metal autotune: measuring %s (once per network "
+            myprintf("Metal autotune: measuring %s%s (once per network "
                      "shape)...\n",
-                     shape.c_str());
+                     shape.c_str(), cfg_ane ? ", Neural Engine" : "");
             table = MetalTuning::measure(*context, channels, blocks,
-                                         *m_fwd_weights, workers, 0.25, {});
+                                         *m_fwd_weights, workers, 0.25,
+                                         cfg_ane, {});
             if (!cache.store(key, table)) {
                 myprintf("Metal autotune: could not save the measurements to "
                          "%s.\n",
@@ -586,9 +594,10 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         }
     }
 
-    const auto make = [this, channels](const MetalPrecision precision) {
+    const auto make = [this, channels](const MetalPrecision precision,
+                                       const bool ane = false) {
         auto pipe = std::make_unique<MetalScheduler>(
-            cfg_batch_size, MetalScheduler::DEFAULT_WORKERS, precision);
+            cfg_batch_size, MetalScheduler::DEFAULT_WORKERS, precision, ane);
         pipe->initialize(channels);
         pipe->push_weights(WINOGRAD_ALPHA, INPUT_CHANNELS, channels,
                            m_fwd_weights);
@@ -598,7 +607,9 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         myprintf("%s.\n", pipe.describe().c_str());
     };
 
-    if (cfg_precision != precision_t::AUTO) {
+    // Precision was fixed by the user and there is nothing to check.
+    if (cfg_precision == precision_t::SINGLE
+        || (cfg_precision == precision_t::HALF && !cfg_ane)) {
         auto pipe = make(cfg_precision == precision_t::HALF
                              ? MetalPrecision::Half
                              : MetalPrecision::Single);
@@ -613,9 +624,10 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         return pipe;
     }
 
-    myprintf("Initializing Metal (checking half precision).\n");
+    myprintf("Initializing Metal (checking half precision%s).\n",
+             cfg_ane ? " on the Neural Engine" : "");
     std::unique_ptr<ForwardPipe> single = make(MetalPrecision::Single);
-    std::unique_ptr<ForwardPipe> half = make(MetalPrecision::Half);
+    std::unique_ptr<ForwardPipe> half = make(MetalPrecision::Half, cfg_ane);
     const auto evaluate = [this](std::unique_ptr<ForwardPipe>& pipe) {
         // get_output_internal() runs on m_forward.
         m_forward = std::move(pipe);
@@ -646,9 +658,19 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
              policy_diff, value_diff);
 
     auto use_half = false;
-    if (!accurate) {
-        myprintf("Using Metal single precision (half is outside the "
-                 "tolerance).\n");
+    if (!accurate && cfg_precision == precision_t::HALF) {
+        // Only the Neural Engine gets here: fp16 on the GPU was requested.
+        myprintf("The Neural Engine is outside the tolerance; using Metal "
+                 "half precision on the GPU.\n");
+        half = make(MetalPrecision::Half);
+        use_half = true;
+    } else if (!accurate) {
+        myprintf("Using Metal single precision (half%s is outside the "
+                 "tolerance).\n",
+                 cfg_ane ? " on the Neural Engine" : "");
+    } else if (cfg_precision == precision_t::HALF) {
+        use_half = true;
+        myprintf("Using Metal half precision.\n");
     } else if (tuned) {
         use_half = true;
         myprintf("Using Metal half precision (at least 5%% faster than "

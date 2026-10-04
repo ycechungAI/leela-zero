@@ -34,19 +34,27 @@
 // The cache holds speed only, keyed by device and network shape. Speed does
 // not depend on the weight values, so a new generation of the same network
 // reuses it. Whether fp16 is accurate does depend on the weights, so that is
-// checked at every start (Network::init_metal), never cached.
+// checked at every start (Network::init_metal), never cached. The Neural
+// Engine is part of the key, as it changes the fp16 speed completely.
 namespace MetalTuning {
 
-// Batch sizes tried, smallest first.
-inline const std::vector<int>& candidate_batches() {
-    static const std::vector<int> batches{8, 16, 32, 64};
-    return batches;
+// Batch sizes tried, smallest first. On the Neural Engine only 8 and 16: each
+// graph compiles for minutes the first time, and the time grows with the
+// batch (330 s at 8, 680 s at 16 on a 15b x 192 net), so 32 and 64 would cost
+// an hour for sizes that the GPU-bound plateau does not need.
+inline const std::vector<int>& candidate_batches(const bool ane = false) {
+    static const std::vector<int> gpu{8, 16, 32, 64};
+    static const std::vector<int> engine{8, 16};
+    return ane ? engine : gpu;
 }
 
 struct Key {
     std::string device;
     int channels;
     int blocks;
+    // The fp16 rows were measured with the tower on the Neural Engine. The
+    // fp32 rows do not depend on it, but are stored per key anyway.
+    bool ane = false;
 };
 
 struct Measurement {
@@ -90,15 +98,16 @@ private:
     std::string m_path;
 };
 
-// Times every candidate batch size in both precisions with one stream per
-// worker, alternating precisions and taking medians. Each measurement runs
+// Times every candidate batch size in both precisions (fp16 on the Neural
+// Engine if ane) with one stream per worker, alternating precisions and taking
+// medians. Each measurement runs
 // for about target_seconds. progress(batch_rows) is called after each batch
 // size with the rows measured so far. Throws std::runtime_error on GPU
 // failure.
 std::vector<Measurement> measure(
     const MetalContext& context, int channels, int blocks,
     const ForwardPipe::ForwardPipeWeights& weights, int workers,
-    double target_seconds,
+    double target_seconds, bool ane,
     const std::function<void(const std::vector<Measurement>&)>& progress);
 
 } // namespace MetalTuning

@@ -61,11 +61,19 @@ class MetalNetwork {
 public:
     // Compiles a graph for each of batch_sizes from the raw (not Winograd)
     // weights of ForwardPipe::ForwardPipeWeights. The weights are not kept.
+    // With ane (fp16 only; ignored for fp32), the placement pass may run the
+    // tower on the Neural Engine. MPSGraph then compiles each graph lazily on
+    // its first run, which takes minutes for a network it has not seen before
+    // (the system caches the result), so the constructor runs every graph once
+    // and prints a notice to stderr. While it does, stdout is redirected to
+    // /dev/null, because the compiler prints "error:" lines there; call this
+    // only when nothing else is writing to stdout.
     // Throws std::runtime_error with a readable message on failure.
     MetalNetwork(const MetalContext& ctx, int channels, int residual_blocks,
                  const ForwardPipe::ForwardPipeWeights& weights,
                  const std::vector<int>& batch_sizes,
-                 MetalPrecision precision = MetalPrecision::Single);
+                 MetalPrecision precision = MetalPrecision::Single,
+                 bool ane = false);
     ~MetalNetwork();
     MetalNetwork(const MetalNetwork&) = delete;
     MetalNetwork& operator=(const MetalNetwork&) = delete;

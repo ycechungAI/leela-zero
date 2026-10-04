@@ -85,6 +85,7 @@ bool cfg_tune_only;
 #endif
 #ifdef USE_METAL
 bool cfg_autotune_batch;
+bool cfg_ane;
 #endif
 #if defined(USE_HALF) || defined(USE_METAL)
 precision_t cfg_precision;
@@ -407,6 +408,7 @@ void GTP::setup_default_parameters() {
 #endif
 #ifdef USE_METAL
     cfg_autotune_batch = false;
+    cfg_ane = false;
 #endif
 #if defined(USE_HALF) || defined(USE_METAL)
     cfg_precision = precision_t::AUTO;

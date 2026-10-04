@@ -64,6 +64,15 @@
   is CPU-bound). A follow-up should add an opt-in flag with a startup warm-up
   that explains the wait, stdout protection around the compile, and the G2
   fp16 gate on real networks. This may make `CoreMLPipe` unnecessary.
+- **Addendum (2026-10-04): `--ane` opt-in implemented, off by default.** Level 1
+  placement is requested only with `--ane` and fp16. `MetalNetwork` prints a
+  notice to stderr, redirects fd 1 to /dev/null during compile, and runs every
+  graph once in the constructor, so no compile happens during search. The fp16
+  accuracy gate always runs for the ANE (a failure falls back to GPU fp16, or
+  fp32 with auto). The tuning cache has a separate `ane` key, and ANE autotune
+  tries only batches 8 and 16. Measured on a random 15b×192 net: first run
+  compiled 330 s (batch 8), 681 s (16), 1132 s (batch 1); ~803 n/s end to end;
+  stdout clean. Still to do: G2 on a real network, and the abort at exit.
 
 ## ADR-005: Raise the engine to C++17
 

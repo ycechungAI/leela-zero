@@ -49,11 +49,13 @@ std::vector<std::string> split_tabs(const std::string& line) {
 
 bool parse_row(const std::string& line, Key& key, Measurement& m) {
     const auto f = split_tabs(line);
-    if (f.size() != 6) {
+    // Six fields, plus a seventh "ane" for the Neural Engine. Rows written
+    // before ANE existed have six.
+    if (f.size() != 6 && !(f.size() == 7 && f[6] == "ane")) {
         return false;
     }
     try {
-        key = Key{f[0], std::stoi(f[1]), std::stoi(f[2])};
+        key = Key{f[0], std::stoi(f[1]), std::stoi(f[2]), f.size() == 7};
         if (f[3] != "single" && f[3] != "half") {
             return false;
         }
@@ -68,7 +70,7 @@ bool parse_row(const std::string& line, Key& key, Measurement& m) {
 
 bool same_key(const Key& a, const Key& b) {
     return a.device == b.device && a.channels == b.channels
-           && a.blocks == b.blocks;
+           && a.blocks == b.blocks && a.ane == b.ane;
 }
 
 std::string format_row(const Key& key, const Measurement& m) {
@@ -76,7 +78,8 @@ std::string format_row(const Key& key, const Measurement& m) {
     std::snprintf(speed, sizeof(speed), "%.1f", m.evals_per_sec);
     return key.device + "\t" + std::to_string(key.channels) + "\t"
            + std::to_string(key.blocks) + "\t" + precision_name(m.precision)
-           + "\t" + std::to_string(m.batch) + "\t" + speed;
+           + "\t" + std::to_string(m.batch) + "\t" + speed
+           + (key.ane ? "\tane" : "");
 }
 } // namespace
 
@@ -232,16 +235,16 @@ bool Cache::store(const Key& key,
 std::vector<Measurement> measure(
     const MetalContext& context, const int channels, const int blocks,
     const ForwardPipe::ForwardPipeWeights& weights, const int workers,
-    const double target_seconds,
+    const double target_seconds, const bool ane,
     const std::function<void(const std::vector<Measurement>&)>& progress) {
     constexpr auto rounds = 3;
     std::vector<Measurement> all;
-    for (const auto batch : candidate_batches()) {
+    for (const auto batch : candidate_batches(ane)) {
         // Both precisions for this batch size, so they can be alternated.
         const MetalNetwork single(context, channels, blocks, weights, {batch},
                                   MetalPrecision::Single);
         const MetalNetwork half(context, channels, blocks, weights, {batch},
-                                MetalPrecision::Half);
+                                MetalPrecision::Half, ane);
 
         // Calibrate the number of runs so a measurement takes about
         // target_seconds, whatever the network size.
