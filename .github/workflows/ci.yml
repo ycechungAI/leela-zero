@@ -106,14 +106,25 @@ jobs:
             echo "$log" | grep -i 'metal' || true
             echo "::notice::No usable Metal device on this runner; GPU parity skipped"
           fi
-      - name: Parity gate G2 (Metal vs CPU)
+      # Precision is pinned: with auto, autotune may pick fp16, which cannot
+      # meet the fp32 tolerance (a 1e-4 gate flaked at 1.4e-4 winrate).
+      - name: Parity gate G2 (Metal fp32 vs CPU)
         if: steps.probe.outputs.metal == 'yes'
         run: |
           python3 scripts/macos/selfplay.py --leelaz build-metal/leelaz -w net.txt \
               -o positions -n 1 -v 2
           python3 scripts/parity/compare_backends.py \
-              --ref "build-metal/leelaz --backend cpu" --test build-metal/leelaz \
+              --ref "build-metal/leelaz --backend cpu" \
+              --test "build-metal/leelaz --precision single" \
               -w net.txt --sgf 'positions/*.sgf' --moves 0,10,60,200 --tol 1e-4
+      - name: Parity gate G2 (Metal fp16 vs CPU)
+        if: steps.probe.outputs.metal == 'yes'
+        run: |
+          python3 scripts/parity/compare_backends.py \
+              --ref "build-metal/leelaz --backend cpu" \
+              --test "build-metal/leelaz --precision half" \
+              -w net.txt --sgf 'positions/*.sgf' --moves 0,10,60,200 \
+              --tol 1e-2 --tol-value 5e-3
 
   linux-cpu:
     name: Linux x86_64 / CPU (OpenBLAS)
