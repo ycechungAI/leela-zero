@@ -85,10 +85,11 @@
     },
     {
       "name": "macos-asan",
-      "displayName": "macOS: CPU only, Debug + AddressSanitizer/UBSan",
+      "displayName": "macOS: Metal + CPU, Debug + AddressSanitizer/UBSan",
       "binaryDir": "${sourceDir}/build-asan",
       "cacheVariables": {
         "USE_CPU_ONLY": "ON",
+        "USE_METAL": "ON",
         "CMAKE_BUILD_TYPE": "Debug",
         "LZ_SANITIZE": "address,undefined"
       },

@@ -1,0 +1,73 @@
+name: nightly
+
+# Slower gates that would make every push wait: Metal parity on several network
+# shapes and the sanitizers with Metal API validation. Scheduled runs only start
+# from the default branch; the push trigger lets changes to this file or to the
+# parity scripts prove themselves on the working branch first.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  push:
+    tags: ["release/*"]
+    branches: [apple-silicon]
+    paths:
+      - ".github/workflows/nightly.yml"
+      - "scripts/parity/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity-full:
+    name: macOS arm64 / Metal parity (G2, 3 shapes)
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install boost
+      - name: Build
+        run: |
+          cmake --preset macos-metal
+          cmake --build --preset macos-metal -j"$(sysctl -n hw.ncpu)"
+      # GitHub's macOS runners are VMs; they have exposed a (paravirtual) Metal
+      # device so far. If one day they do not, say so instead of failing.
+      - name: Probe for a Metal device
+        id: probe
+        run: |
+          python3 scripts/macos/make_random_net.py net.txt --blocks 2 --filters 16
+          log=$(printf 'quit\n' | build-metal/leelaz -w net.txt --gtp --backend metal 2>&1 || true)
+          if echo "$log" | grep -q '^Metal: '; then
+            echo "$log" | grep '^Metal: '
+            echo "metal=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No usable Metal device on this runner; parity not run"
+          fi
+      - name: Gate G2 (fp32 and fp16 vs CPU)
+        if: steps.probe.outputs.metal == 'yes'
+        run: scripts/parity/full_gate.sh --leelaz build-metal/leelaz
+
+  metal-asan:
+    name: macOS arm64 / Metal ASan + UBSan + API validation
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install boost
+      - name: Build
+        run: |
+          cmake --preset macos-asan
+          cmake --build --preset macos-asan -j"$(sysctl -n hw.ncpu)"
+      - name: Unit tests with the Metal API validation layer
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          MTL_DEBUG_LAYER: "1"
+        run: ctest --preset macos-asan
