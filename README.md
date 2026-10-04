@@ -135,7 +135,8 @@ for the full guide and the helper scripts in `scripts/macos/`. In short:
     git clone https://github.com/leela-zero/leela-zero
     cd leela-zero
     brew install cmake boost
-    scripts/macos/build.sh            # or: cmake --preset macos-cpu && cmake --build --preset macos-cpu
+    scripts/macos/build.sh            # Metal GPU backend (default); or: cmake --preset macos-metal && cmake --build --preset macos-metal
+    scripts/macos/build.sh cpu        # CPU only (Accelerate)
 
 ## Example of compiling - Windows
 

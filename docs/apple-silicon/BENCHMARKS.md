@@ -98,6 +98,121 @@ Thread-count sweep (4 runs each, medians; Accelerate BLAS):
   3,451 vs 3,299 (medians of 5). Small gain, within noise; kept to match the
   OpenBLAS/MKL behaviour of one BLAS thread per search thread.
 
+## Phase 2 step 2.7: autotune (2026-10-03)
+
+Random nets, M4. Default run (autotuned) against the step 2.4 defaults (fp32,
+batch 8, 16 threads) and against batch 8 with `--precision auto`. n/s from
+`--benchmark`, 3 runs each, the cache warm.
+
+| Network | Autotune picks | Autotuned default | 2.4 defaults (fp32 B8) | B8 + auto precision |
+|---------|----------------|------------------:|-----------------------:|--------------------:|
+| random 6b×64 | fp16, batch 16, 32 threads | **7,450** | 6,150 (+21%) | 6,725 (+11%) |
+| random 15b×192 | fp16, batch 8, 16 threads | **399** | 357 (+12%) | 392 (+2%) |
+
+Against the CPU (Accelerate, 10 threads: about 3,100 and 200 n/s) that is
+2.4× and 2.0×.
+
+Measurements the choice came from (evals/s, GPU only, 2 streams):
+
+| 6b×64 | B=8 | B=16 | B=32 | B=64 |
+|-------|----:|-----:|-----:|-----:|
+| single | 6,916 | 7,267 | 7,233 | 6,784 |
+| half | 7,382 | 7,802 | 7,995 | 7,634 |
+
+| 15b×192 | B=8 | B=16 | B=32 | B=64 |
+|---------|----:|-----:|-----:|-----:|
+| single | 357 | 349 | 359 | 364 |
+| half | 397 | 387 | 386 | 400 |
+
+- One-off cost on a cold cache: 6 s (6b×64), 19 s (15b×192); a cached start
+  takes 0.2 s and 0.6 s, including the fp16 accuracy check.
+- The 5% rule picks 16 for the small net (8 is 7% below its best) and 8 for
+  the big one (flat across batch sizes). Larger batches would add search
+  threads for little GPU gain.
+- Not measured: a real 40b×256 network. Tuning time grows with the network,
+  but each measurement is bounded to about 0.25 s, so the cost is dominated by
+  compiling the 8 graphs.
+
+## Phase 2 step 2.5: fp16 and `--precision auto` (2026-10-03)
+
+Random nets, M4. fp16 means the residual tower runs in fp16; the 1×1 heads
+and the input/output buffers stay fp32. n/s from `--benchmark`, 3 runs.
+
+| Network | fp32 (n/s) | fp16, GPU only (n/s) | Gain |
+|---------|-----------:|---------------------:|-----:|
+| random 15b×192 | 358–365 | 402 (all 3 runs) | **+11%** |
+| random 6b×64 | ~6,100 | ~6,600 | +8% |
+
+- Gate G2 at the N6 fp16 tolerances (policy 1e-2, value 5e-3), 3 positions × 8
+  symmetries: 15b×192 policy 3.4e-4 and value 2.5e-5; 6b×64 policy 3.2e-6 and
+  value 1.1e-4. fp32 still passes at 1e-4 (6.4e-7 and 3.5e-9).
+- `--precision auto` times both precisions at the full batch size with one
+  stream per worker (what the scheduler will see), alternates the
+  measurements and takes medians (15b×192: fp32 355, fp16 409 evals/s), and
+  takes fp16 only if it is ≥ 5% faster and within the N6 tolerances of fp32
+  on six positions through the full head pipeline. Startup cost: about 5 s on
+  15b×192, which step 2.7 caches.
+- A first version measured one batch at a time and picked fp32 on 15b×192:
+  sequential runs hide the CPU-side work that fp16 overlaps. Single-stream
+  runs also favored whichever precision went first (GPU warm-up), hence the
+  alternation.
+- Self-check (`-DUSE_METAL_SELFCHECK=ON`): with the check probability forced to 1,
+  every search evaluation was compared with the CPU, 0 mismatches in both
+  precisions (throughput drops to ~2,300 n/s while it runs).
+
+### Neural Engine placement (experiment, not enabled)
+
+MPSGraph's default optimization level may run the fp16 tower on the Neural
+Engine:
+
+| Network | fp32 GPU | fp16 GPU only | fp16 + ANE placement |
+|---------|---------:|--------------:|---------------------:|
+| random 15b×192 | 358 | 402 | **~760** (758, 769, 731) |
+| random 6b×64 | 6,100 | 6,600 | 6,560 (CPU-bound) |
+
+- First run on a never-seen 15b×192 network: **325 s** (5 n/s), then 2.7 s
+  once the OS has cached the compiled graph. Each batch size is a separate
+  graph.
+- MPSGraph prints `error: Incompatible element type for ANE …` to stdout
+  during compilation, which breaks the GTP stream (`compare_backends.py`
+  could not parse it).
+- Accuracy on a real network is untested, so `MetalNetwork` pins level 0
+  (GPU only). See ADR-004 for the follow-up.
+
+## Phase 2 step 2.4: MetalScheduler (batched, asynchronous) (2026-10-03)
+
+Random nets, M4, fp32. Interleaved, 3 runs, medians, n/s.
+
+| Network | CPU (Accelerate, 10 threads) | Metal 2.4 defaults (batch 8, 2 workers, 16 threads) | Metal / CPU | Metal batch 1 (`-t 1`) |
+|---------|-----------------------------:|----------------------------------------------------:|------------:|-----------------------:|
+| random 15b×192 | 198 | 326 | **1.65×** | 209 |
+| random 6b×64 | 3,117 | 5,850 | **1.88×** | 1,377 |
+
+Worker × batch sweep (threads = batch × workers, 2 runs each):
+
+| | B=4 | B=8 | B=16 | B=32 |
+|---|---:|---:|---:|---:|
+| 15b×192, W=1 | 284–321 | 330–343 | 344–348 | 350–352 |
+| 15b×192, W=2 | 339–348 | **349–353** | 341–351 | 340–347 |
+| 15b×192, W=3 | 284–342 | 349 | 331–338 | 326 |
+| 6b×64, W=1 | 3,351–3,459 | 4,089–4,288 | 4,937–4,951 | 4,600–4,810 |
+| 6b×64, W=2 | 5,040–5,328 | **5,750–5,803** | 5,865–6,167 | 6,240–6,485 |
+| 6b×64, W=3 | 4,954–5,281 | 5,713–5,890 | 5,299–6,089 | 5,890–6,213 |
+
+- 15b×192 is GPU-bound: every configuration with batch ≥ 8 plateaus near
+  350 n/s, even with one worker. That is ~2.6 TFLOPS of conv work (about 60%
+  of the GPU's fp32 peak), so fp16 (step 2.5) is the next lever, not deeper
+  pipelining.
+- The small net is CPU-side bound: a second worker adds ~25%, a third adds
+  nothing. Hence 2 workers, not the spec's triple buffering (ADR-007).
+- Batch-1 latency (`-t 1`): 209 n/s vs 179 for the 2.3 synchronous pipe, so
+  the asynchronous completion path costs nothing. The spec's spin-then-wait
+  mitigation is not needed.
+- Batching works: a debug run reported 188 full batches and 8 single
+  evaluations.
+- Peak memory footprint (15b×192, `-v 1600`): Metal 550 MB vs CPU 635 MB.
+  Not yet measured on 40b×256.
+
 ## Phase 2 step 2.3: Metal (MPSGraph, fp32, batch 1, synchronous) (2026-10-03)
 
 Random nets, M4, `--benchmark`, 3 runs each, n/s. The Metal pipe evaluates one
@@ -127,6 +242,8 @@ in step 2.4.
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 15b×192, 3 positions × 8 symmetries | 3.7e-7 | 0 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 6b×64, same | 2.8e-9 | 1.2e-7 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized (Accelerate) vs Eigen 3.4 | random 15b×192, same | 3.4e-7 | 0 | PASS (tol 1e-5) |
+| G2 | Metal fp16 vs CPU (`--cpu-only`) | random 15b×192, 3 positions × 8 symmetries | 3.4e-4 | 2.5e-5 | PASS (N6: 1e-2 / 5e-3) |
+| G2 | Metal fp16 vs CPU (`--cpu-only`) | random 6b×64, same | 3.2e-6 | 1.1e-4 | PASS (N6: 1e-2 / 5e-3) |
 | G2 | Metal fp32 vs CPU (`--cpu-only`) | random 6b×64, 3 positions × 8 symmetries | 3.0e-9 | 1.8e-7 | PASS (tol 1e-4) |
 | G2 | Metal fp32 vs CPU (`--cpu-only`) | random 15b×192, same | 3.1e-7 | 0 | PASS (tol 1e-4) |
 | — | Metal vs CPU raw head outputs (unit test, C=8, 2 blocks, non-trivial BN) | 4 random inputs | 6.0e-7 | — | PASS (tol 1e-4; batch 4 = batch 1 exactly) |

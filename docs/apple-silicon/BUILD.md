@@ -28,8 +28,9 @@ scripts/macos/debug.sh smoke
 ```
 
 `build.sh` initializes the submodules (Eigen, googletest) if needed, builds
-`build/leelaz` and `build/tests`, and runs the tests. A good run ends with
-`[  PASSED  ] 13 tests.`
+the Metal configuration (`build-metal/leelaz` and `build-metal/tests`), and
+runs the tests. A good run ends with `[  PASSED  ]`. The engine uses the GPU
+by default; `--backend cpu` (or `build.sh cpu`) is the CPU-only fallback.
 
 ## 2. Scripts
 
@@ -37,8 +38,8 @@ Everything lives in `scripts/macos/`. Pass `-h` to any script for its usage.
 
 | Script | Purpose |
 |--------|---------|
-| `build.sh [cpu\|opencl\|debug\|asan\|dist] [--clean] [--no-test]` | Configure, build and test one configuration |
-| `start.sh [-w net] [-b cpu\|opencl] [-t threads] [-v visits] [-- leelaz args]` | Run `leelaz` in GTP mode, for GUIs or by hand |
+| `build.sh [metal\|cpu\|opencl\|debug\|asan\|dist] [--clean] [--no-test]` | Configure, build and test one configuration (default: `metal`) |
+| `start.sh [-w net] [-b metal\|cpu\|opencl] [-t threads] [-v visits] [-- leelaz args]` | Run `leelaz` in GTP mode, for GUIs or by hand (default backend: `metal`) |
 | `debug.sh lldb\|asan\|tests\|smoke` | Debugger, sanitizers, unit tests under lldb, quick smoke test |
 | `train.sh selfplay\|sgf\|split\|fit` | Training-data workflow (section 6) |
 | `make_random_net.py out.txt` | Writes a random-weights network for tests (it plays nonsense) |
@@ -48,11 +49,12 @@ Each configuration gets its own build directory, so they don't clobber each othe
 
 | Config | Directory | Notes |
 |--------|-----------|-------|
-| `cpu` (default) | `build/` | Release, LTO, `-mcpu=native`, Accelerate BLAS. **Use this one** |
+| `metal` (default) | `build-metal/` | Release, LTO, `-mcpu=native`. Metal GPU backend with the Accelerate CPU backend as fallback. **Use this one** |
+| `cpu` | `build/` | Release, CPU only, Accelerate BLAS. The reference for parity checks |
 | `opencl` | `build-opencl/` | Release, OpenCL GPU backend. Deprecated by Apple; kept as the speed baseline |
 | `debug` | `build-debug/` | `-Og -g`, no LTO, for lldb |
 | `asan` | `build-asan/` | Debug + AddressSanitizer + UBSan |
-| `dist` | `build-dist/` | Release with `-mcpu=apple-m1` instead of `native`, so the binary runs on any Apple Silicon Mac. Use it for binaries you hand to others |
+| `dist` | `build-dist/` | Metal + CPU, with `-mcpu=apple-m1` instead of `native`, so the binary runs on any Apple Silicon Mac. Use it for binaries you hand to others |
 
 Generated data goes in `data/` and logs go in `logs/`. Git ignores both.
 
@@ -63,10 +65,15 @@ CLion and VS Code pick up automatically:
 
 ```bash
 cmake --list-presets
-cmake --preset macos-cpu            # or macos-opencl, macos-metal (Metal backend, batch 1 until step 2.4), macos-debug, macos-asan, macos-dist
+cmake --preset macos-cpu            # or macos-opencl, macos-metal (Metal backend), macos-debug, macos-asan, macos-dist
 cmake --build --preset macos-cpu
 ctest --preset macos-cpu            # unit tests; works from any directory
 ```
+
+Metal has one extra option: `-DUSE_METAL_SELFCHECK=ON` makes roughly one in
+2,000 evaluations also run on the CPU and abort on a mismatch, like the
+OpenCL build always does. It keeps a second copy of the weights, so it is off
+by default.
 
 ## 3. Get a network
 
@@ -129,6 +136,22 @@ or
 
 Lizzie needs `-g` (`--gtp`) and works best with pondering left on.
 
+### Metal autotune
+
+With neither `--batchsize` nor `-t`, the Metal backend measures batch sizes 8,
+16, 32 and 64 in fp32 and fp16 the first time it sees a network *shape*
+(device, filters, blocks), saves the table, and picks the smallest batch within
+5% of the best throughput. The thread count follows (batch × 2 workers). That
+takes a few seconds (about 20 s for 15b×192) the first time; later starts read
+the cache and take well under a second. A new generation of the same network
+reuses the table. `leelaz --tune-only -w net` re-measures on demand.
+
+With `--precision auto`, fp16 is used only if the table says it is at least 5%
+faster **and** it matches fp32 within the N6 tolerances on this particular
+network, which is checked on every start because it depends on the weights, not
+the shape. Fixing `--batchsize` or `-t` skips the table; fp16 is then timed on
+the spot.
+
 ### Useful leelaz options
 
 | Option | Meaning |
@@ -139,8 +162,11 @@ Lizzie needs `-g` (`--gtp`) and works best with pondering left on.
 | `--timemanage off` | Use the full visit budget every move |
 | `--benchmark` | Fixed-workload speed test, then exit (`start.sh -- --benchmark`) |
 | `-l file` | Log file. `start.sh` always writes `logs/leelaz-<time>.log` |
-| `--cpu-only` | In an OpenCL build, skip the GPU |
-| `--tune-only` | OpenCL: run the kernel tuner and exit |
+| `--backend auto\|metal\|opencl\|cpu` | Compute backend; `auto` (default) is Metal, else OpenCL, else CPU, among those built in. Naming one that is not built in is an error that lists what is |
+| `--cpu-only` | Same as `--backend cpu` |
+| `--precision auto\|single\|half` | Metal and OpenCL: network precision. `auto` (default) picks fp16 only if it is faster and accurate (Metal: ≥ 5% faster, within the N6 tolerances) |
+| `--batchsize N` | Metal and OpenCL: max evaluations per GPU batch (0 = default). On Metal, with neither this nor `-t` given, the batch size and thread count come from autotune (below) |
+| `--tune-only` | OpenCL: run the kernel tuner and exit. Metal: re-measure the batch sizes, save them and exit |
 
 ## 5. Debug
 
@@ -312,6 +338,7 @@ decides (default hypothesis 0 vs 35 Elo).
 |------|-------|
 | Default network | `~/.local/share/leela-zero/best-network` |
 | OpenCL tuning cache | `~/.local/share/leela-zero/leelaz_opencl_tuning` |
+| Metal autotune cache | `~/Library/Application Support/leela-zero/metal_tuning` (override with `$LZ_METAL_TUNING_FILE`; plain text, safe to delete) |
 | Script logs | `logs/` (repo root) |
 | Training data | `data/` (repo root), or `$LZ_TRAIN_DATA` |
-| Builds | `build/`, `build-opencl/`, `build-debug/`, `build-asan/`, `build-dist/` |
+| Builds | `build-metal/`, `build/`, `build-opencl/`, `build-debug/`, `build-asan/`, `build-dist/` |

@@ -50,7 +50,7 @@
 #ifdef USE_OPENCL
 #include "OpenCLScheduler.h"
 #endif
-#ifdef USE_OPENCL_SELFCHECK
+#ifdef USE_GPU_SELFCHECK
 #include "SMP.h"
 #endif
 
@@ -140,8 +140,11 @@ private:
 #ifdef USE_HALF
     void select_precision(int channels);
 #endif
+#ifdef USE_METAL
+    std::unique_ptr<ForwardPipe> init_metal(int channels);
+#endif
     std::unique_ptr<ForwardPipe> m_forward;
-#ifdef USE_OPENCL_SELFCHECK
+#ifdef USE_GPU_SELFCHECK
     void compare_net_outputs(const Netresult& data, const Netresult& ref);
     std::unique_ptr<ForwardPipe> m_forward_cpu;
 #endif
