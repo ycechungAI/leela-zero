@@ -64,7 +64,9 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
    and the `dist` preset.
 7. ✅ Autotune of batch size and precision, with a persisted cache and
    `--tune-only` (ADR-008): +21% / +12% over the 2.4 defaults.
-8. Optional 2b: `forward_into` zero-staging input path.
+8. ✅ Optional 2b: `forward_into` zero-staging input path. Measured, not
+   implemented: the search waits on the GPU 98.5% of the time and the copy is
+   0.05% of samples (BENCHMARKS.md).
 9. Benchmark. If MPSGraph is under target by more than 15%, start the custom
    MSL Winograd fallback (ADR-001).
 10. 🟡 CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU) ✅;

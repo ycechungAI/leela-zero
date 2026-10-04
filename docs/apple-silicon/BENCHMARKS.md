@@ -98,6 +98,29 @@ Thread-count sweep (4 runs each, medians; Accelerate BLAS):
   3,451 vs 3,299 (medians of 5). Small gain, within noise; kept to match the
   OpenBLAS/MKL behaviour of one BLAS thread per search thread.
 
+## Phase 2 step 2.8: zero-staging input (measured, not implemented) (2026-10-04)
+
+Question: would letting `Network` gather the input planes straight into the
+GPU slot (`forward_into`, spec 05 §3.3) speed anything up? Profile of a
+Metal search on the smallest net, random 6b×64 at the autotuned defaults
+(fp16, batch 16, 32 search threads), `sample` for 8 s:
+
+| | Samples | Share |
+|---|---:|---:|
+| All threads | 25,579 | 100% |
+| Waiting (condition variables, semaphores, work queues) | 25,196 | 98.5% |
+| Busy | 383 | 1.5% |
+| `MetalScheduler::worker` input/output copies | 13 | 0.05% |
+
+The search is GPU-bound even on the smallest net: threads spend almost all
+their time waiting for evaluations. The copy that `forward_into` would remove
+is 0.05% of samples (3% of the little CPU time there is), so it cannot raise
+throughput, and on 15b×192 and larger the ratio is smaller still. It would also
+need the batching redesigned so a search thread can own a slot row before a
+worker picks the batch up (ADR-007 deliberately avoided that shared state).
+Decision: not implemented. Revisit only if a profile ever shows the CPU side
+as the bottleneck.
+
 ## Phase 2 step 2.7: autotune (2026-10-03)
 
 Random nets, M4. Default run (autotuned) against the step 2.4 defaults (fp32,
