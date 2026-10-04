@@ -579,16 +579,25 @@ void init_global_objects() {
 
     Utils::create_z_table();
 
-    // The network may change cfg_num_threads (Metal autotune), so the pool is
-    // created after it.
-    initialize_network();
-
     // Search threads ask for performance cores (a no-op off Apple Silicon).
-    for (auto i = size_t{0}; i < cfg_num_threads; i++) {
-        thread_pool.add_thread([]() { Platform::set_thread_qos_interactive(); });
-    }
+    auto pool_size = size_t{0};
+    const auto grow_pool = [&pool_size]() {
+        for (; pool_size < cfg_num_threads; pool_size++) {
+            thread_pool.add_thread(
+                []() { Platform::set_thread_qos_interactive(); });
+        }
+    };
+    // The pool must exist before the network: OpenCL's precision autodetect
+    // (Network::benchmark_time) runs its evaluations on it.
+    grow_pool();
     // The main thread also searches.
     Platform::set_thread_qos_interactive();
+
+    initialize_network();
+
+    // Metal autotune may have raised cfg_num_threads. (If it lowered it, the
+    // extra pool threads just stay idle: searches start cfg_num_threads tasks.)
+    grow_pool();
 }
 
 void benchmark(GameState& game) {

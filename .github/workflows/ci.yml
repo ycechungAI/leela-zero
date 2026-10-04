@@ -75,6 +75,22 @@ jobs:
         run: |
           cmake --preset macos-opencl
           cmake --build --preset macos-opencl -j"$(sysctl -n hw.ncpu)"
+      # Startup runs OpenCL's precision autodetect on the search thread pool;
+      # a hang there once slipped through a compile-only job. The runner may
+      # have no usable OpenCL device, so only a hang fails this step.
+      - name: Startup must not hang
+        run: |
+          python3 scripts/macos/make_random_net.py net.txt --blocks 2 --filters 16
+          python3 - <<'PY'
+          import subprocess, sys
+          try:
+              r = subprocess.run(["build-opencl/leelaz", "-w", "net.txt", "--gtp"],
+                                 input="quit\n", capture_output=True, text=True,
+                                 timeout=300)
+          except subprocess.TimeoutExpired:
+              sys.exit("leelaz did not finish starting within 300 s (hang?)")
+          print(r.stderr[-2000:])
+          PY
 
   macos-metal:
     name: macOS arm64 / Metal
