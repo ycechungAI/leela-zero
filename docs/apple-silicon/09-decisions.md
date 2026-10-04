@@ -52,6 +52,27 @@
   runs.
 - **Consequences:** Adds a Python export step and a model cache directory.
   Not a default.
+- **Addendum (2026-10-03, step 2.5):** MPSGraph can reach the ANE without
+  Core ML. Its default optimization level adds a placement pass that ran the
+  fp16 tower on the Neural Engine in our experiments: about 760 n/s against
+  about 400 for fp16 on the GPU on a random 15b×192 net (BENCHMARKS.md). Three
+  problems keep it off for now, so `MetalNetwork` compiles at level 0
+  (GPU only): the first run on a never-seen network compiled for **325 s**
+  (cached by the OS afterwards: 2.7 s); MPSGraph prints `error: Incompatible
+  element type for ANE` lines to **stdout**, which corrupts GTP; and accuracy
+  has not been checked on a real network (the 6b×64 case showed no gain, as it
+  is CPU-bound). A follow-up should add an opt-in flag with a startup warm-up
+  that explains the wait, stdout protection around the compile, and the G2
+  fp16 gate on real networks. This may make `CoreMLPipe` unnecessary.
+- **Addendum (2026-10-04): `--ane` opt-in implemented, off by default.** Level 1
+  placement is requested only with `--ane` and fp16. `MetalNetwork` prints a
+  notice to stderr, redirects fd 1 to /dev/null during compile, and runs every
+  graph once in the constructor, so no compile happens during search. The fp16
+  accuracy gate always runs for the ANE (a failure falls back to GPU fp16, or
+  fp32 with auto). The tuning cache has a separate `ane` key, and ANE autotune
+  tries only batches 8 and 16. Measured on a random 15b×192 net: first run
+  compiled 330 s (batch 8), 681 s (16), 1132 s (batch 1); ~803 n/s end to end;
+  stdout clean. Still to do: G2 on a real network, and the abort at exit.
 
 ## ADR-005: Raise the engine to C++17
 
@@ -81,3 +102,54 @@
   `.sln`. There are no Docker images until someone needs one; a single modern
   Dockerfile can be added and built in CI then. Fewer moving parts means less
   to keep green.
+
+## ADR-007: Metal scheduler with worker-owned slots and two graphs
+
+- **Status:** Accepted (Phase 2, step 2.4). Refines spec 05 §3.3–3.4.
+- **Context:** Spec 05 proposed a shared ring of K = 3 slots per worker with
+  an explicit `FREE → FILLING → SUBMITTED → DONE` state machine, untracked
+  hazards, and one compiled graph per batch size {1, 2, …, 64}. Two facts
+  changed the trade-offs: `BatchQueue::pickup()` only ever returns a full batch
+  or a single entry, and on the M4 the GPU saturates at 15b×192 with one batch
+  in flight (sweep in BENCHMARKS.md).
+- **Decision:**
+  - Each worker thread owns its slots (shared `MTLBuffer`s) for life. A
+    slot's states are that thread's program order, so no slot state is shared
+    between threads and there is no lock-free state machine.
+  - One set of compiled `MPSGraphExecutable`s is shared by all workers.
+    Encoding is serialized by a mutex in `MetalNetwork::run()`; execution
+    overlaps (`runAsync` + a completion semaphore per call).
+  - Only two graphs: batch 1 and `cfg_batch_size`. The network does not keep
+    the raw weights after compiling them.
+  - Defaults: 2 workers, batch 8, 16 search threads. A third worker
+    (triple buffering) measured no faster; batch 16 gave ~1% more throughput
+    for twice the threads.
+- **Consequences:** The scheduler is about 150 lines of plain C++ with no
+  Objective-C and no shared mutable slot state; TSan reports no races. GPU
+  memory holds two copies of the folded weights instead of seven. If
+  `BatchQueue` ever returns partial batches, the full-size slot still works
+  (unused rows are ignored), at the cost of computing padding. Step 2.7
+  (autotune) should revisit the batch size per network.
+
+## ADR-008: Metal autotune caches speed per network shape, checks accuracy per network
+
+- **Status:** Accepted (Phase 2, step 2.7). Refines spec 05 §3.6.
+- **Context:** The best batch size and precision depend on the device and the
+  network's size, so measuring on every start costs seconds (20 s for
+  15b×192), which is unacceptable for a GUI engine and for self-play, where a
+  new network generation starts a new process. But whether fp16 is accurate
+  depends on the weight *values*, so caching that verdict by shape could
+  approve a network where fp16 fails.
+- **Decision:** The cache (`~/Library/Application Support/leela-zero/
+  metal_tuning`, plain text, tab separated, one row per device × channels ×
+  blocks × precision × batch) holds throughput only. The fp16 accuracy check
+  (N6 tolerances, six positions through the full head pipeline) runs on every
+  start, in about 0.2 s. `--tune-only` forces a re-measurement. Writes go to a
+  temporary file and are renamed, and unreadable rows are skipped, so a
+  crashed or concurrent process cannot corrupt it. A user-fixed `--batchsize`
+  or `-t` skips the table and times fp32/fp16 at that batch size instead.
+- **Consequences:** Starts are fast after the first, and a new training
+  generation costs nothing extra. The thread pool is created after the network
+  because autotune can change the thread count. The cache is not invalidated
+  by OS or driver updates; `--tune-only` is the remedy, and a stale table only
+  costs a slightly suboptimal batch size.

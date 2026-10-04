@@ -76,6 +76,45 @@ jobs:
           cmake --preset macos-opencl
           cmake --build --preset macos-opencl -j"$(sysctl -n hw.ncpu)"
 
+  macos-metal:
+    name: macOS arm64 / Metal
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install boost
+      - name: Build
+        run: |
+          cmake --preset macos-metal
+          cmake --build --preset macos-metal -j"$(sysctl -n hw.ncpu)"
+      # GitHub's macOS runners are VMs and may have no usable Metal device.
+      # The build above always runs; the GPU tests skip themselves and the
+      # parity gate is skipped when Metal cannot start.
+      - name: Unit tests
+        run: ctest --preset macos-metal --output-on-failure
+      - name: Probe for a Metal device
+        id: probe
+        run: |
+          python3 scripts/macos/make_random_net.py net.txt --blocks 6 --filters 64
+          log=$(printf 'quit\n' | build-metal/leelaz -w net.txt --gtp 2>&1 || true)
+          if echo "$log" | grep -q '^Metal: '; then
+            echo "$log" | grep '^Metal: '
+            echo "metal=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "$log" | grep -i 'metal' || true
+            echo "::notice::No usable Metal device on this runner; GPU parity skipped"
+          fi
+      - name: Parity gate G2 (Metal vs CPU)
+        if: steps.probe.outputs.metal == 'yes'
+        run: |
+          python3 scripts/macos/selfplay.py --leelaz build-metal/leelaz -w net.txt \
+              -o positions -n 1 -v 2
+          python3 scripts/parity/compare_backends.py \
+              --ref "build-metal/leelaz --backend cpu" --test build-metal/leelaz \
+              -w net.txt --sgf 'positions/*.sgf' --moves 0,10,60,200 --tol 1e-4
+
   linux-cpu:
     name: Linux x86_64 / CPU (OpenBLAS)
     runs-on: ubuntu-24.04

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Start leelaz in GTP mode (for Sabaki, Lizzie, GoGui, or typing GTP by hand).
 #
-#   scripts/macos/start.sh [-w weights] [-b cpu|opencl] [-t threads] [-v visits] [-- extra leelaz args]
+#   scripts/macos/start.sh [-w weights] [-b metal|cpu|opencl] [-t threads] [-v visits] [-- extra leelaz args]
 #
-# Defaults: backend cpu, weights $LZ_WEIGHTS or ~/.local/share/leela-zero/best-network,
+# Defaults: backend metal, weights $LZ_WEIGHTS or ~/.local/share/leela-zero/best-network,
 # leelaz picks the thread count, log written to logs/leelaz-<time>.log.
 #
 # Examples:
@@ -14,7 +14,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 require_macos_arm64
 
-BACKEND="cpu"; WEIGHTS=""; THREADS=""; VISITS=""; EXTRA=()
+BACKEND="metal"; WEIGHTS=""; THREADS=""; VISITS=""; EXTRA=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -w) WEIGHTS="$2"; shift 2 ;;
@@ -27,14 +27,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ "$BACKEND" == "cpu" || "$BACKEND" == "opencl" ]] || die "backend must be cpu or opencl (metal arrives in Phase 2)"
+[[ "$BACKEND" == "metal" || "$BACKEND" == "cpu" || "$BACKEND" == "opencl" ]] || die "backend must be metal, cpu or opencl"
 WEIGHTS="$(resolve_weights "$WEIGHTS")"
 LEELAZ="$(leelaz_for "$BACKEND")"
 
 mkdir -p "$REPO_ROOT/logs"
 LOG="$REPO_ROOT/logs/leelaz-$(date +%Y%m%d-%H%M%S).log"
 
-ARGS=(--gtp -w "$WEIGHTS" --logfile "$LOG")
+ARGS=(--gtp -w "$WEIGHTS" --logfile "$LOG" --backend "$BACKEND")
 [[ -n "$THREADS" ]] && ARGS+=(-t "$THREADS")
 [[ -n "$VISITS" ]] && ARGS+=(-v "$VISITS")
 ARGS+=(${EXTRA[@]+"${EXTRA[@]}"})

@@ -54,14 +54,21 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
    (`cmake --preset macos-metal`).
 3. ✅ `MetalNetwork` via MPSGraph, fp32, fixed batch sizes, with BN folded into conv
    (G2 passes; synchronous batch-1 `MetalPipe` is a stopgap until step 4).
-4. `MetalScheduler`: shared-buffer slot ring, triple buffering, completion wakeups.
-5. Gate G2 (fp32). Then add fp16 + `--precision auto` + `USE_METAL_SELFCHECK`.
-6. `--backend` flag, plus Metal as the default on macOS.
-7. Autotune of batch size and precision, with a persisted cache.
+4. ✅ `MetalScheduler`: worker-owned shared-buffer slots, 2 batches in flight,
+   completion wakeups (ADR-007). 1.65× the CPU on random 15b×192.
+5. ✅ Gate G2 (fp32), then fp16 + `--precision auto` + `USE_METAL_SELFCHECK`
+   (fp16 +11% on 15b×192; Neural Engine placement ~2× more, see ADR-004
+   addendum, follow-up needed).
+6. ✅ `--backend auto|cpu|metal|opencl` (`--cpu-only` kept as an alias), Metal as the
+   default backend and as the default config of `build.sh`, `start.sh`, `train.sh`
+   and the `dist` preset.
+7. ✅ Autotune of batch size and precision, with a persisted cache and
+   `--tune-only` (ADR-008): +21% / +12% over the 2.4 defaults.
 8. Optional 2b: `forward_into` zero-staging input path.
 9. Benchmark. If MPSGraph is under target by more than 15%, start the custom
    MSL Winograd fallback (ADR-001).
-10. CI `build-metal`, nightly `parity-full` and `asan`.
+10. 🟡 CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU) ✅;
+    nightly `parity-full` and Metal `asan` still to do.
 
 **Exit:** ≥2.5× OpenCL on 40b×256, G2/G3/G4 pass, and the soak test is clean.
 Tag `as.2`.

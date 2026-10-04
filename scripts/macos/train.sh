@@ -36,7 +36,7 @@ case "$CMD" in
             esac
         done
         WEIGHTS="$(resolve_weights "$WEIGHTS")"
-        LEELAZ="$(leelaz_for cpu)"
+        LEELAZ="$(leelaz_for metal)"
         info "self-play: $GAMES game(s), $VISITS visits/move, net $(basename "$WEIGHTS")"
         python3 "$SCRIPTS_DIR/selfplay.py" --leelaz "$LEELAZ" -w "$WEIGHTS" \
             -o "$OUT" -n "$GAMES" -v "$VISITS"
@@ -52,11 +52,11 @@ case "$CMD" in
         RAND="$REPO_ROOT/logs/random-net.txt"
         mkdir -p "$REPO_ROOT/logs"
         [[ -f "$RAND" ]] || python3 "$SCRIPTS_DIR/make_random_net.py" "$RAND" >/dev/null
-        LEELAZ="$(leelaz_for cpu)"
+        LEELAZ="$(leelaz_for metal)"
         PREFIX="$OUT/$(basename "${SGF%.*}")"
         info "converting $SGF -> $PREFIX.*.gz"
         printf 'dump_supervised %s %s\nquit\n' "$SGF" "$PREFIX" \
-            | "$LEELAZ" --gtp -q -w "$RAND" >/dev/null
+            | "$LEELAZ" --gtp -q --backend cpu -w "$RAND" >/dev/null
         ls -1 "$PREFIX".*.gz 2>/dev/null | sed 's/^/  /' || die "no chunks written (bad SGF?)"
         ;;
 

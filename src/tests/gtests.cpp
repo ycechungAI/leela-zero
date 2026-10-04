@@ -403,14 +403,45 @@ TEST(PlatformTest, CoreCountsAreSane) {
 #include "CPUPipe.h"
 #include "MetalContext.h"
 #include "MetalNetwork.h"
+#include "MetalScheduler.h"
+#include "MetalTuning.h"
+#include "Network.h"
+
+#include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+
+// GitHub's macOS runners are virtual machines and may have no usable Metal
+// device. Skip there instead of failing; on a real Mac these always run.
+static bool metal_available(std::string& why) {
+    std::string error;
+    if (MetalContext::create(error)) {
+        return true;
+    }
+    why = error;
+    return false;
+}
+#define SKIP_WITHOUT_METAL()                                                   \
+    do {                                                                       \
+        std::string why_;                                                      \
+        if (!metal_available(why_)) {                                          \
+            GTEST_SKIP() << "no Metal device: " << why_;                       \
+        }                                                                      \
+    } while (0)
 
 TEST(MetalContextTest, DeviceAndSelfTest) {
+    SKIP_WITHOUT_METAL();
     std::string error;
     const auto ctx = MetalContext::create(error);
     ASSERT_NE(ctx, nullptr) << error;
     EXPECT_FALSE(ctx->device_name().empty());
     EXPECT_TRUE(ctx->has_unified_memory());
-    EXPECT_TRUE(ctx->supports_apple_gpu_family());
+    // Informational: GitHub's virtualized runners report an "Apple
+    // Paravirtual device" that is not in an Apple GPU family, yet runs the
+    // MPSGraph network correctly. Nothing requires the family yet.
+    std::cout << "Apple GPU family (Apple7+): "
+              << (ctx->supports_apple_gpu_family() ? "yes" : "no") << std::endl;
     EXPECT_GE(ctx->max_threads_per_threadgroup(), 256u);
     std::cout << ctx->describe() << std::endl;
 
@@ -453,6 +484,7 @@ static std::shared_ptr<ForwardPipe::ForwardPipeWeights> make_test_weights(
 }
 
 TEST(MetalNetworkTest, MatchesCpuAndBatchesConsistently) {
+    SKIP_WITHOUT_METAL();
     constexpr auto C = 8;
     constexpr auto blocks = 2;
     constexpr auto N = 4;
@@ -463,7 +495,7 @@ TEST(MetalNetworkTest, MatchesCpuAndBatchesConsistently) {
     std::string error;
     const auto ctx = MetalContext::create(error);
     ASSERT_NE(ctx, nullptr) << error;
-    MetalNetwork metal(*ctx, C, blocks, *weights);
+    MetalNetwork metal(*ctx, C, blocks, *weights, {1, N});
 
     CPUPipe cpu;
     cpu.initialize(C);
@@ -508,5 +540,446 @@ TEST(MetalNetworkTest, MatchesCpuAndBatchesConsistently) {
     EXPECT_LE(worst_batch, 1e-6f) << "batch 4 vs batch 1";
     std::cout << "Metal vs CPU max diff " << worst_cpu << ", batch vs single "
               << worst_batch << ", max |output| " << magnitude << std::endl;
+}
+
+// Reference outputs from the CPU backend, one per input.
+struct EvalCase {
+    std::vector<float> in, pol, val;
+};
+
+static std::vector<EvalCase> make_cases(
+    const std::shared_ptr<ForwardPipe::ForwardPipeWeights>& weights,
+    const int C, const int count, std::mt19937& rng) {
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    CPUPipe cpu;
+    cpu.initialize(C);
+    cpu.push_weights(WINOGRAD_ALPHA, Network::INPUT_CHANNELS, C, weights);
+    std::vector<EvalCase> cases(count);
+    for (auto& c : cases) {
+        c.in.resize(Network::INPUT_CHANNELS * plane);
+        for (auto& x : c.in) {
+            x = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+        }
+        c.pol.resize(Network::OUTPUTS_POLICY * plane);
+        c.val.resize(Network::OUTPUTS_VALUE * plane);
+        cpu.forward(c.in, c.pol, c.val);
+    }
+    return cases;
+}
+
+static float max_diff(const std::vector<float>& a, const std::vector<float>& b) {
+    auto worst = 0.0f;
+    for (auto i = size_t{0}; i < a.size(); i++) {
+        worst = std::max(worst, std::abs(a[i] - b[i]));
+    }
+    return worst;
+}
+
+// fp16 tower, fp32 heads: results stay close to the fp32 CPU reference. The
+// bound is relative to the output scale and loose enough for any plausible
+// rounding, but a wrong cast or a broken fold is off by order 1.
+TEST(MetalNetworkTest, HalfPrecisionIsCloseToCpu) {
+    SKIP_WITHOUT_METAL();
+    constexpr auto C = 32;
+    constexpr auto blocks = 3;
+    constexpr auto N = 4;
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(4321);
+    const auto weights = make_test_weights(C, blocks, rng);
+    const auto cases = make_cases(weights, C, N, rng);
+
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+    MetalNetwork half(*ctx, C, blocks, *weights, {N}, MetalPrecision::Half);
+
+    std::vector<float> in;
+    for (const auto& c : cases) {
+        in.insert(in.end(), c.in.begin(), c.in.end());
+    }
+    std::vector<float> pol(N * Network::OUTPUTS_POLICY * plane);
+    std::vector<float> val(N * Network::OUTPUTS_VALUE * plane);
+    half.forward(in.data(), N, pol.data(), val.data());
+
+    auto worst = 0.0f, scale = 0.0f;
+    for (auto i = 0; i < N; i++) {
+        for (auto j = 0; j < Network::OUTPUTS_POLICY * plane; j++) {
+            worst = std::max(worst, std::abs(pol[i * Network::OUTPUTS_POLICY * plane + j]
+                                             - cases[i].pol[j]));
+            scale = std::max(scale, std::abs(cases[i].pol[j]));
+        }
+        for (auto j = 0; j < Network::OUTPUTS_VALUE * plane; j++) {
+            worst = std::max(worst, std::abs(val[i * Network::OUTPUTS_VALUE * plane + j]
+                                             - cases[i].val[j]));
+            scale = std::max(scale, std::abs(cases[i].val[j]));
+        }
+    }
+    std::cout << "fp16 vs CPU max diff " << worst << " (output scale " << scale
+              << ")" << std::endl;
+    EXPECT_GT(scale, 0.05f);
+    EXPECT_LE(worst, 0.02f * scale);
+    // fp16 must actually differ from fp32, or the test proves nothing.
+    EXPECT_GT(worst, 0.0f);
+}
+
+// The Neural Engine compiles lazily; the constructor must do it all up front,
+// keep stdout clean, and give results within fp16 tolerance. MPSGraph places
+// nothing on the ANE for small towers (32x3, 64x3 and 128x3 gave results
+// identical to fp16 on the GPU on an M4), so this uses 128x6, which it does
+// place; the test checks that, so it cannot pass on the GPU by accident.
+// The first compile on a machine can be slow, so it only runs with
+// LZ_TEST_ANE=1.
+TEST(MetalNetworkTest, NeuralEngineIsCloseToCpuAndKeepsStdoutClean) {
+    SKIP_WITHOUT_METAL();
+    if (std::getenv("LZ_TEST_ANE") == nullptr) {
+        GTEST_SKIP() << "set LZ_TEST_ANE=1 (compiles for the Neural Engine)";
+    }
+    constexpr auto C = 128;
+    constexpr auto blocks = 6;
+    constexpr auto N = 4;
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(4321);
+    const auto weights = make_test_weights(C, blocks, rng);
+    const auto cases = make_cases(weights, C, N, rng);
+
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+    MetalNetwork gpu(*ctx, C, blocks, *weights, {N}, MetalPrecision::Half);
+
+    testing::internal::CaptureStdout();
+    std::unique_ptr<MetalNetwork> ane;
+    ASSERT_NO_THROW(ane = std::make_unique<MetalNetwork>(
+                        *ctx, C, blocks, *weights, std::vector<int>{1, N},
+                        MetalPrecision::Half, true));
+    std::printf("after-compile marker\n");
+    const auto out = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(out, "after-compile marker\n") << "nothing else on stdout";
+
+    std::vector<float> in;
+    for (const auto& c : cases) {
+        in.insert(in.end(), c.in.begin(), c.in.end());
+    }
+    std::vector<float> pol(N * Network::OUTPUTS_POLICY * plane);
+    std::vector<float> val(N * Network::OUTPUTS_VALUE * plane);
+    ane->forward(in.data(), N, pol.data(), val.data());
+    std::vector<float> gpu_pol(pol.size()), gpu_val(val.size());
+    gpu.forward(in.data(), N, gpu_pol.data(), gpu_val.data());
+    const auto vs_gpu = std::max(max_diff(pol, gpu_pol), max_diff(val, gpu_val));
+    std::cout << "ANE vs GPU fp16 max diff " << vs_gpu << std::endl;
+    EXPECT_GT(vs_gpu, 0.0f) << "identical to the GPU: not placed on the ANE";
+    auto worst = 0.0f, scale = 0.0f;
+    for (auto i = 0; i < N; i++) {
+        for (auto j = 0; j < Network::OUTPUTS_POLICY * plane; j++) {
+            worst = std::max(worst, std::abs(pol[i * Network::OUTPUTS_POLICY * plane + j]
+                                             - cases[i].pol[j]));
+            scale = std::max(scale, std::abs(cases[i].pol[j]));
+        }
+        for (auto j = 0; j < Network::OUTPUTS_VALUE * plane; j++) {
+            worst = std::max(worst, std::abs(val[i * Network::OUTPUTS_VALUE * plane + j]
+                                             - cases[i].val[j]));
+            scale = std::max(scale, std::abs(cases[i].val[j]));
+        }
+    }
+    std::cout << "ANE vs CPU max diff " << worst << " (output scale " << scale
+              << ")" << std::endl;
+    EXPECT_GT(scale, 0.05f);
+    EXPECT_LE(worst, 0.02f * scale);
+}
+
+// ane is ignored for fp32.
+TEST(MetalNetworkTest, AneFlagIsIgnoredForSinglePrecision) {
+    SKIP_WITHOUT_METAL();
+    constexpr auto C = 8;
+    constexpr auto blocks = 1;
+    std::mt19937 rng(11);
+    const auto weights = make_test_weights(C, blocks, rng);
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+    testing::internal::CaptureStderr();
+    MetalNetwork single(*ctx, C, blocks, *weights, {1}, MetalPrecision::Single,
+                        true);
+    const auto err = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(err.find("Neural Engine"), std::string::npos);
+}
+
+// Many search threads, each input distinct: any mix-up between batch rows,
+// slots or waiting threads shows up as a wrong answer.
+static void run_concurrency_test(const MetalPrecision precision,
+                                 const float tolerance) {
+    constexpr auto C = 32;
+    constexpr auto blocks = 2;
+    constexpr auto threads = 12;
+    constexpr auto iterations = 150;
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(99);
+    const auto weights = make_test_weights(C, blocks, rng);
+    const auto cases = make_cases(weights, C, 37, rng);
+
+    MetalScheduler metal(4, 3, precision);
+    metal.initialize(C);
+    metal.push_weights(WINOGRAD_ALPHA, Network::INPUT_CHANNELS, C, weights);
+
+    std::atomic<int> wrong{0};
+    std::atomic<int> done{0};
+    std::vector<float> worst(threads, 0.0f);
+    std::vector<std::thread> pool;
+    for (auto t = 0; t < threads; t++) {
+        pool.emplace_back([&, t]() {
+            std::vector<float> pol(Network::OUTPUTS_POLICY * plane);
+            std::vector<float> val(Network::OUTPUTS_VALUE * plane);
+            for (auto i = 0; i < iterations; i++) {
+                const auto& c = cases[(t * 7 + i * 3) % cases.size()];
+                metal.forward(c.in, pol, val);
+                const auto d = std::max(max_diff(pol, c.pol), max_diff(val, c.val));
+                worst[t] = std::max(worst[t], d);
+                if (d > tolerance) {
+                    wrong++;
+                }
+                done++;
+            }
+        });
+    }
+    for (auto& t : pool) {
+        t.join();
+    }
+    EXPECT_EQ(done.load(), threads * iterations);
+    EXPECT_EQ(wrong.load(), 0);
+    std::cout << "max diff vs CPU over " << done.load() << " evals: "
+              << *std::max_element(worst.begin(), worst.end()) << std::endl;
+}
+
+TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
+    SKIP_WITHOUT_METAL();
+    run_concurrency_test(MetalPrecision::Single, 1e-4f);
+}
+
+// fp16: the same mix-up check with a tolerance that fp16 rounding fits in but
+// a wrong row or slot (order-1 errors) does not.
+TEST(MetalSchedulerTest, ConcurrentEvaluationsInHalfPrecision) {
+    SKIP_WITHOUT_METAL();
+    run_concurrency_test(MetalPrecision::Half, 0.05f);
+}
+
+// drain() releases every waiting thread with NetworkHaltException, and the
+// scheduler works again after resume().
+TEST(MetalSchedulerTest, DrainReleasesWaitersAndResumeRestarts) {
+    SKIP_WITHOUT_METAL();
+    constexpr auto C = 32;
+    constexpr auto blocks = 2;
+    constexpr auto threads = 10;
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(7);
+    const auto weights = make_test_weights(C, blocks, rng);
+    const auto cases = make_cases(weights, C, 8, rng);
+
+    MetalScheduler metal(4, 3);
+    metal.initialize(C);
+    metal.push_weights(WINOGRAD_ALPHA, Network::INPUT_CHANNELS, C, weights);
+
+    std::atomic<int> halted{0};
+    std::atomic<int> evals{0};
+    std::vector<std::thread> pool;
+    for (auto t = 0; t < threads; t++) {
+        pool.emplace_back([&, t]() {
+            std::vector<float> pol(Network::OUTPUTS_POLICY * plane);
+            std::vector<float> val(Network::OUTPUTS_VALUE * plane);
+            try {
+                for (auto i = 0;; i++) {
+                    metal.forward(cases[(t + i) % cases.size()].in, pol, val);
+                    evals++;
+                }
+            } catch (const NetworkHaltException&) {
+                halted++;
+            }
+        });
+    }
+    while (evals.load() < 200) {
+        std::this_thread::yield();
+    }
+    metal.drain();
+    for (auto& t : pool) {
+        t.join(); // hangs here if drain() misses a waiter
+    }
+    EXPECT_EQ(halted.load(), threads);
+
+    metal.resume();
+    std::vector<float> pol(Network::OUTPUTS_POLICY * plane);
+    std::vector<float> val(Network::OUTPUTS_VALUE * plane);
+    metal.forward(cases[0].in, pol, val);
+    EXPECT_LE(max_diff(pol, cases[0].pol), 1e-4f);
+    EXPECT_LE(max_diff(val, cases[0].val), 1e-4f);
+}
+
+// --- autotune: the chooser and the cache need no GPU ---
+
+using MetalTuning::Measurement;
+static Measurement S(const int batch, const double speed) {
+    return {MetalPrecision::Single, batch, speed};
+}
+static Measurement H(const int batch, const double speed) {
+    return {MetalPrecision::Half, batch, speed};
+}
+
+TEST(MetalTuningTest, ChoosesSmallestBatchWithinFivePercentOfTheBest) {
+    // Plateau from batch 16: 16 is within 5% of 32's best, 8 is not.
+    const std::vector<Measurement> m{S(8, 900),   S(16, 970), S(32, 1000),
+                                     S(64, 990),  H(8, 900),  H(16, 970),
+                                     H(32, 1000), H(64, 990)};
+    const auto single_only = MetalTuning::choose(m, true, false);
+    EXPECT_EQ(single_only.precision, MetalPrecision::Single);
+    EXPECT_EQ(single_only.batch, 16);
+    // Both allowed, equal speeds: fp16 is not 5% faster, so fp32 wins.
+    EXPECT_EQ(MetalTuning::choose(m, true, true).precision,
+              MetalPrecision::Single);
+}
+
+TEST(MetalTuningTest, HalfNeedsToBeAtLeastFivePercentFaster) {
+    const std::vector<Measurement> slower{S(8, 1000), H(8, 1049)};
+    EXPECT_EQ(MetalTuning::choose(slower, true, true).precision,
+              MetalPrecision::Single);
+    const std::vector<Measurement> faster{S(8, 1000), H(8, 1060)};
+    EXPECT_EQ(MetalTuning::choose(faster, true, true).precision,
+              MetalPrecision::Half);
+    // Each precision keeps its own best batch.
+    const std::vector<Measurement> mixed{S(8, 500),  S(16, 1000), H(8, 1500),
+                                         H(16, 1550)};
+    const auto c = MetalTuning::choose(mixed, true, true);
+    EXPECT_EQ(c.precision, MetalPrecision::Half);
+    EXPECT_EQ(c.batch, 8); // 1500 is within 5% of 1550
+}
+
+TEST(MetalTuningTest, HonorsTheAllowedPrecisions) {
+    const std::vector<Measurement> m{S(8, 1000), H(8, 2000)};
+    EXPECT_EQ(MetalTuning::choose(m, true, false).precision,
+              MetalPrecision::Single);
+    EXPECT_EQ(MetalTuning::choose(m, false, true).precision,
+              MetalPrecision::Half);
+    EXPECT_THROW(MetalTuning::choose(m, false, false), std::runtime_error);
+    EXPECT_THROW(MetalTuning::choose({}, true, true), std::runtime_error);
+    // Allowed but never measured.
+    EXPECT_THROW(MetalTuning::choose({S(8, 1000)}, false, true),
+                 std::runtime_error);
+}
+
+static std::string temp_file(const char* const name) {
+    const auto dir = std::filesystem::temp_directory_path()
+                     / ("lz-tuning-test-" + std::to_string(std::rand()));
+    std::filesystem::create_directories(dir);
+    return (dir / name).string();
+}
+
+TEST(MetalTuningTest, CacheRoundTripAndKeyIsolation) {
+    const auto path = temp_file("metal_tuning");
+    const MetalTuning::Cache cache(path);
+    const MetalTuning::Key a{"Apple M4", 192, 15};
+    const MetalTuning::Key b{"Apple M4", 256, 40};
+    const MetalTuning::Key other_device{"Apple M5", 192, 15};
+
+    std::vector<Measurement> out;
+    EXPECT_FALSE(cache.load(a, out)) << "no file yet";
+
+    ASSERT_TRUE(cache.store(a, {S(8, 357.4), H(8, 396.6)}));
+    ASSERT_TRUE(cache.store(b, {S(16, 120.0)}));
+    ASSERT_TRUE(cache.load(a, out));
+    ASSERT_EQ(out.size(), 2u);
+    EXPECT_EQ(out[0].precision, MetalPrecision::Single);
+    EXPECT_EQ(out[0].batch, 8);
+    EXPECT_NEAR(out[0].evals_per_sec, 357.4, 0.06);
+    EXPECT_EQ(out[1].precision, MetalPrecision::Half);
+    ASSERT_TRUE(cache.load(b, out));
+    EXPECT_EQ(out.size(), 1u);
+    EXPECT_FALSE(cache.load(other_device, out)) << "device is part of the key";
+
+    // The Neural Engine is a separate key.
+    const MetalTuning::Key a_ane{"Apple M4", 192, 15, true};
+    EXPECT_FALSE(cache.load(a_ane, out)) << "ane is part of the key";
+    ASSERT_TRUE(cache.store(a_ane, {H(8, 760.0)}));
+    ASSERT_TRUE(cache.load(a_ane, out));
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].precision, MetalPrecision::Half);
+    ASSERT_TRUE(cache.load(a, out));
+    EXPECT_EQ(out.size(), 2u) << "the non-ANE rows are untouched";
+
+    // Storing a key again replaces its rows and keeps the others.
+    ASSERT_TRUE(cache.store(a, {S(32, 400.0)}));
+    ASSERT_TRUE(cache.load(a, out));
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].batch, 32);
+    EXPECT_TRUE(cache.load(b, out)) << "other keys survive";
+    std::filesystem::remove_all(std::filesystem::path(path).parent_path());
+}
+
+TEST(MetalTuningTest, CacheToleratesGarbage) {
+    const auto path = temp_file("metal_tuning");
+    {
+        std::ofstream f(path);
+        f << "# some header\n"
+             "not a row\n"
+             "Apple M4\t192\t15\tsingle\t8\t350.0\n"
+             "Apple M4\t192\t15\thalf\tEIGHT\t400.0\n"   // bad number
+             "Apple M4\t192\t15\tquarter\t8\t400.0\n"     // bad precision
+             "Apple M4\t192\t15\thalf\t8\t-5\n"           // bad speed
+             "Apple M4\t192\t15\thalf\t16\t410.0\t\textra\n"
+             "Apple M4\t192\t15\thalf\t16\t410.0\n";
+    }
+    const MetalTuning::Cache cache(path);
+    std::vector<Measurement> out;
+    ASSERT_TRUE(cache.load({"Apple M4", 192, 15}, out));
+    EXPECT_EQ(out.size(), 2u) << "only the two well-formed rows";
+    // A directory that cannot be created is a quiet failure, not an exception.
+    const MetalTuning::Cache unwritable("/dev/null/nope/metal_tuning");
+    EXPECT_FALSE(unwritable.store({"Apple M4", 1, 1}, {S(8, 1.0)}));
+    std::filesystem::remove_all(std::filesystem::path(path).parent_path());
+}
+
+// Rows written before the Neural Engine existed (six fields) are GPU rows.
+TEST(MetalTuningTest, LegacyRowsAreNotAneRows) {
+    const auto path = temp_file("metal_tuning");
+    {
+        std::ofstream f(path);
+        f << "Apple M4\t192\t15\thalf\t8\t400.0\n"
+             "Apple M4\t192\t15\thalf\t8\t760.0\tane\n"
+             "Apple M4\t192\t15\thalf\t16\t760.0\tgpu\n"; // bad flag
+    }
+    const MetalTuning::Cache cache(path);
+    std::vector<Measurement> out;
+    ASSERT_TRUE(cache.load({"Apple M4", 192, 15, false}, out));
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_NEAR(out[0].evals_per_sec, 400.0, 0.01);
+    ASSERT_TRUE(cache.load({"Apple M4", 192, 15, true}, out));
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_NEAR(out[0].evals_per_sec, 760.0, 0.01);
+    std::filesystem::remove_all(std::filesystem::path(path).parent_path());
+}
+
+TEST(MetalTuningTest, NeuralEngineTriesFewerBatchSizes) {
+    EXPECT_EQ(MetalTuning::candidate_batches(false),
+              (std::vector<int>{8, 16, 32, 64}));
+    EXPECT_EQ(MetalTuning::candidate_batches(true), (std::vector<int>{8, 16}));
+}
+
+// The GPU part: every candidate batch size, both precisions, plausible numbers.
+TEST(MetalTuningTest, MeasuresEveryCandidateOnTheGpu) {
+    SKIP_WITHOUT_METAL();
+    constexpr auto C = 16;
+    constexpr auto blocks = 2;
+    std::mt19937 rng(5);
+    const auto weights = make_test_weights(C, blocks, rng);
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+
+    auto reports = 0;
+    const auto m = MetalTuning::measure(
+        *ctx, C, blocks, *weights, 2, 0.01, false,
+        [&reports](const std::vector<Measurement>&) { reports++; });
+    EXPECT_EQ(reports, 4) << "one progress report per batch size";
+    EXPECT_EQ(m.size(), 8u);
+    for (const auto& r : m) {
+        EXPECT_GT(r.evals_per_sec, 0.0);
+    }
+    EXPECT_NO_THROW(MetalTuning::choose(m, true, true));
 }
 #endif
