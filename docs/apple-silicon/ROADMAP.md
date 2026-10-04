@@ -67,8 +67,11 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 8. ✅ Optional 2b: `forward_into` zero-staging input path. Measured, not
    implemented: the search waits on the GPU 98.5% of the time and the copy is
    0.05% of samples (BENCHMARKS.md).
-9. Benchmark. If MPSGraph is under target by more than 15%, start the custom
-   MSL Winograd fallback (ADR-001).
+9. ✅ Benchmark. MPSGraph is 0.75× OpenCL (target 2–2.5×), so the custom MSL
+   Winograd fallback starts (ADR-009). Also fixed an OpenCL startup hang found
+   here.
+11. ⬜ `MetalWinograd`: MSL Winograd transforms + `simdgroup_matrix` batched
+    GEMM behind `MetalScheduler`, autotuned against MPSGraph (ADR-009).
 10. 🟡 CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU) ✅;
     nightly `parity-full` and Metal `asan` still to do.
 

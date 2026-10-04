@@ -98,6 +98,41 @@ Thread-count sweep (4 runs each, medians; Accelerate BLAS):
   3,451 vs 3,299 (medians of 5). Small gain, within noise; kept to match the
   OpenBLAS/MKL behaviour of one BLAS thread per search thread.
 
+## Phase 2 step 2.9: Metal (MPSGraph) vs OpenCL vs CPU (2026-10-04)
+
+Random nets, M4, `--benchmark` (`-v 1600` on 15b×192, `-v 800` on 40b×256),
+3 interleaved rounds, medians, n/s. OpenCL tuned first (`--tune-only`; it
+reports no fp16 compute, and its autodetect picks half *storage*). Metal's
+autotune cache was warm. All backends ran about 14% below the previous day's
+numbers (machine state), and interleaving keeps the comparison fair.
+
+| Network | OpenCL default (B5, 10 thr) | OpenCL B16, 32 thr | CPU (Accelerate, 10 thr) | Metal fp32 (B8, 16 thr) | Metal autotuned (fp16, B8, 16 thr) | Metal ÷ best OpenCL | Target |
+|---------|---:|---:|---:|---:|---:|---:|---:|
+| random 15b×192 | 432 | **455** | 181 | 310 | 339 | **0.75×** | ≥ 2× |
+| random 40b×256 | 106 | **107** | 48 | 69 | 80 | **0.75×** | ≥ 2.5× |
+
+**Result: MPSGraph misses the target by far.** Metal is 1.9× the CPU but only
+0.75× OpenCL, on both sizes.
+
+Why: one 40b×256 evaluation is ~34.5 GFLOP of direct 3×3 convolution. Metal's
+80 n/s is ~2.8 TFLOPS, about 63% of the M4 GPU's ~4.4 TFLOPS fp32 peak, so
+MPSGraph runs direct convolution well. OpenCL's 106 n/s would be ~3.7 TFLOPS of
+direct-convolution work. It gets there because Leela Zero's OpenCL kernels use
+Winograd F(4×4, 3×3), which needs about 2.5–4× fewer multiplications, and
+MPSGraph does not use Winograd for these layers.
+
+Decision (ADR-009): start the custom MSL Winograd backend (spec 05 Strategy B).
+Porting the OpenCL Winograd kernels to Metal should recover OpenCL's speed
+without OpenCL's copies and translation layer. A `simdgroup_matrix` batched
+GEMM is the route toward the spec's 2–2.5× target: at MPSGraph's 63% of peak,
+Winograd would put 40b×256 near 2× OpenCL. Separately, Neural Engine
+placement measured ~760 n/s on 15b×192 (step 2.5), which would already be
+1.7× OpenCL, if its startup and stdout problems are solved (follow-up task).
+
+Found while running this: OpenCL builds hung at startup since step 2.7 (the
+thread pool was created after the network, but OpenCL's precision autodetect
+runs on it). Fixed in `d0ebb96`, and CI now starts the OpenCL binary.
+
 ## Phase 2 step 2.8: zero-staging input (measured, not implemented) (2026-10-04)
 
 Question: would letting `Network` gather the input planes straight into the

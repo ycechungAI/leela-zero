@@ -2,7 +2,8 @@
 
 ## ADR-001: Metal (MPSGraph-first) as the GPU backend, instead of OpenCL
 
-- **Status:** Accepted (pending the Phase 2 benchmark confirmation)
+- **Status:** Accepted. The Phase 2 benchmark triggered the custom-MSL
+  fallback; see ADR-009.
 - **Context:** On Apple Silicon, OpenCL is a deprecated translation layer capped
   at 1.2. It has no fp16 storage extension and no `simdgroup_matrix`, and it
   forces explicit host↔device copies even though memory is unified.
@@ -144,3 +145,26 @@
   because autotune can change the thread count. The cache is not invalidated
   by OS or driver updates; `--tune-only` is the remedy, and a stale table only
   costs a slightly suboptimal batch size.
+
+## ADR-009: MPSGraph missed the target; build a Metal Winograd backend
+
+- **Status:** Accepted (Phase 2, step 2.9). Triggers the ADR-001 fallback.
+- **Context:** Measured on the M4 (BENCHMARKS.md, step 2.9), the MPSGraph
+  backend reaches 0.75× OpenCL on random 15b×192 and 40b×256 nets, against
+  targets of 2× and 2.5×. MPSGraph runs direct convolution at ~63% of the
+  GPU's fp32 peak; OpenCL wins because its kernels use Winograd F(4×4, 3×3).
+  ADR-001 set the trigger at missing the target by more than 15%.
+- **Decision:** Add a second Metal network implementation, `MetalWinograd`,
+  behind the same `MetalScheduler`, slots and autotune: port the OpenCL input
+  and output transforms (with fused BN/ReLU/residual) to MSL, and do the 36
+  batched GEMMs with `simdgroup_matrix` (fp16 inputs, fp32 accumulation), then
+  fp32. Keep the MPSGraph network as the correctness reference and as an
+  autotune candidate; autotune picks whichever is faster per shape. Gates as
+  for MPSGraph: G2 at fp32 1e-4 and fp16 N6, the concurrency tests, ASan/TSan.
+- **Consequences:** Hand-written kernels to maintain (the OpenCL ones already
+  exist as the template). Until it lands, OpenCL is about 1.33× faster than
+  the default Metal backend on these nets, while Metal is 1.9× the CPU.
+  Neural Engine placement (ADR-004 addendum) is a separate, possibly larger
+  win, and does not replace this: it needs fp16, a long first compile and
+  stdout protection.
+
