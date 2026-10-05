@@ -75,8 +75,8 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
     Winograd fp16 is the default, 1.5× OpenCL and 2× the old Metal default. The
     spec's 2–2.5× OpenCL target is open (custom GEMM 2.11d, fusions 2.11e).
     Plan: [12-plan-2.11-metal-winograd.md](12-plan-2.11-metal-winograd.md).
-10. 🟡 CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU) ✅;
-    nightly `parity-full` and Metal `asan` still to do.
+10. ✅ CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU),
+    nightly `parity-full` (both engines, both precisions) and Metal `asan`.
 
 **Exit:** ≥2.5× OpenCL on 40b×256, G2/G3/G4 pass, and the soak test is clean.
 Tag `as.2`.

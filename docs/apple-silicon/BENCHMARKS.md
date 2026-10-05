@@ -321,6 +321,17 @@ Engine:
 - Accuracy on a real network is untested, so `MetalNetwork` pins level 0
   (GPU only). See ADR-004 for the follow-up.
 
+## Phase 2 soak (2026-10-05)
+
+`scripts/macos/soak.py --minutes 120 -t 16`, random 15b×192 network, Metal
+autotuned (Winograd fp16), 800 visits per move: 12 games, 5,114 moves, no crash
+or hang. RSS rises with the search tree during a game and drops back to
+~120 MB when the next one starts (peak 638 MB in a long game); medians by
+quarter 381 / 375 / 124 MB (second, third, last). A 20-minute run on the
+review-fixed build ended with `leaks`: 0 leaks for 0 bytes. The Accelerate
+per-thread fix from 1.R is speed-neutral: 15b×192 CPU 241→242, 174→173 and
+83→83 n/s at -t 10/4/1 (medians of 3, interleaved).
+
 ## Winograd fp16 accuracy on a real network (2026-10-05)
 
 The nightly failed G2 for fp16 Winograd on the random 20×256 stand-in (policy
