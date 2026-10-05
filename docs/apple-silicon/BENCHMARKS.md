@@ -450,10 +450,40 @@ in step 2.4.
 | — | Metal vs CPU raw head outputs (unit test, C=8, 2 blocks, non-trivial BN) | 4 random inputs | 6.0e-7 | — | PASS (tol 1e-4; batch 4 = batch 1 exactly) |
 | G1 | 1.4a scalar fallback (MSVC path) vs pre-change | random 6b×64, 2 positions × 8 symmetries | 3.0e-9 | 6.0e-8 | PASS (tol 1e-5) |
 
-## Official baseline (to do)
+## Official baseline: real networks (step 1.5, 2026-10-05)
 
-| Backend | 15b×192 n/s | 40b×256 n/s | Notes |
-|---------|------------:|------------:|-------|
-| OpenCL (upstream path) | — | — | |
-| CPU Eigen | — | — | |
-| CPU Accelerate | — | — | |
+M4 Mac mini (4P+6E, 10-core GPU), macOS 27.0.1, commit `c44465b`. Networks
+from zero.sjeng.org, verified by SHA-256 and deleted afterwards: 15b×192
+`d351f06e…` (the last 15-block net) and 40b×256 `0e9ea880…` (the final best
+network). `--benchmark` (n/s), 3 interleaved rounds, medians; OpenCL tuned
+first, Metal autotuned first (fresh cache).
+
+| Backend | 15b×192, 1600 v | 40b×256, 800 v | Notes |
+|---------|----------------:|---------------:|-------|
+| OpenCL (B16, t32) | 558 | 117 | upstream kernels, tuned |
+| CPU Eigen (t10) | 99 | 22 | |
+| CPU Accelerate (t10) | 225 | 50 | **2.3× Eigen** (Phase 1 exit ≥ 1.5×) |
+| Metal (autotuned: Winograd fp16) | 682 | 157 | **1.22× / 1.34× OpenCL**, 3.0× / 3.1× Accelerate |
+
+The first Metal round on 15b×192 (377) was an outlier and is excluded by the
+median. On the real 15b×192 net Metal's lead depends on search length: at
+1600 visits 1.25× (710 vs 568, a second set of rounds), at 6400 visits 1.38×
+(775 vs 560). Fixing the batch and threads by hand (B8/16/32) gives the same
+690–720 n/s, so the autotune choice is not the cause. Random nets of the same
+shapes gave 1.57× / 1.52× (step 2.11c), so random-net ratios overstate Metal
+somewhat on real nets.
+
+### Gates G3 and G4 on the real 15b×192 network (2026-10-05)
+
+- **G3** (`USE_METAL_SELFCHECK`, 1 in 2000 evaluations checked against the
+  CPU): 6 self-play games at 200 visits, 1,330 moves (~130 checks), no
+  mismatch. Pass.
+- **G4** (`scripts/parity/gtp_regression.py`: 20 positions, `genmove` at 1600
+  playouts, `-t 1 -s 1`, no noise, ample time): leelaz's search was not
+  reproducible across processes (pool threads seeded their RNG from the thread
+  id, and the default one-hour time budget cut long searches short); both are
+  fixed. With a reproducible search, against the CPU backend, on positions
+  from real self-play: OpenCL 18/20, Metal fp32 17/20, Metal fp16 16/20 (the
+  spec asks ≥ 19/20). Most differences are adjacent points (n8/n9, c3/c2,
+  q1/q2, r11/s11): MCTS turns evaluation differences of ~1e-6 into different
+  visit counts on near-ties, so even the upstream OpenCL backend misses 19/20.

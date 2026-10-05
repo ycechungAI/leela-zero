@@ -619,11 +619,18 @@ void init_global_objects() {
     Utils::create_z_table();
 
     // Search threads ask for performance cores and single-threaded
-    // Accelerate (no-ops off Apple Silicon).
+    // Accelerate (no-ops off Apple Silicon). Each one seeds its random
+    // generator from the seed and its index, not from its thread id, so that
+    // a fixed --seed gives the same search in every process (gate G4).
     auto pool_size = size_t{0};
     const auto grow_pool = [&pool_size]() {
         for (; pool_size < cfg_num_threads; pool_size++) {
-            thread_pool.add_thread(Platform::init_search_thread);
+            const auto index = std::uint64_t{pool_size + 1};
+            thread_pool.add_thread([index]() {
+                Platform::init_search_thread();
+                Random::get_Rng().seedrandom(
+                    cfg_rng_seed + index * 0x9E3779B97F4A7C15ULL);
+            });
         }
     };
     // The pool must exist before the network: OpenCL's precision autodetect

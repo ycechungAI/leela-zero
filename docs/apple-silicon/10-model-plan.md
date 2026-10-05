@@ -96,7 +96,7 @@ Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done
 | 1.3 | M | Sonnet 5.5 | ✅ | ctest, ASan clean | `7fafb4b` | QoS on search threads + P/E core log. The spec's `-t 7` default was measured and **not adopted** (no throughput gain) |
 | 1.4a | S | Opus 5.5 | ✅ | ctest, G1 vs pre-change 3.7e-7 and vs Eigen 3.4e-7, scalar (MSVC) fallback G1 3.0e-9, ASan+UBSan clean, x86-64 SSE compile | `004f7d6` | 1.26× single-thread, 1.13× at 10 threads (random 15b×192). Now store-bound; a `[tile][channel]` V layout was tried and was 9% slower (see BENCHMARKS.md) |
 | 1.4b | M | Sonnet 5.5 | ✅ | ctest, G1 vs pre-1.4 build 3.7e-7 and vs Eigen 3.4e-7, ASan+UBSan clean | `aec4bd0` | Speed-neutral (±1%); kept for less memory traffic and one fewer duplicate function |
-| 1.5 | L | | ⬜ | | | |
+| 1.5 | L | Opus 5.5 | ✅ | G1 on real 15b×192 and 40b×256 (winrate 4.2e-7 / 3.3e-6, tol 1e-5); real-network baseline in BENCHMARKS.md: Accelerate 2.3× Eigen (exit ≥ 1.5×) | `c44465b` (measured), this commit | Done by Opus with step 2.R/2.11d. Metal on real nets: 1.22× OpenCL on 15b×192 at 1600 visits (1.38× at 6400), 1.34× on 40b×256 |
 | 1.R | S | Opus 5.5 | ✅ | `/code-review high` on 7fafb4b/004f7d6/aec4bd0: 8 findings, 7 fixed; CPU output bit-identical to before (6b×64); ctest; CPU speed unchanged (15b×192: 242/173/83 n/s at -t 10/4/1, medians of 3) | `9f0ecca` | Real bugs: Accelerate single-threading was set on the main thread only (per-thread setting), so pool threads ran multi-threaded sgemm (no measurable speed effect); the vectorized input transform formed a pointer past the end of the 18-plane input. Skipped: hoisting the residual branch (cleanup) |
 
 ### Phase 2
