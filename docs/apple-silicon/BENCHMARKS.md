@@ -321,6 +321,28 @@ Engine:
 - Accuracy on a real network is untested, so `MetalNetwork` pins level 0
   (GPU only). See ADR-004 for the follow-up.
 
+## Step 2.11d: profile and custom GEMM go/no-go (2026-10-05)
+
+Stage profile (search n/s, Winograd fp16, batch 16, two rounds; a stage is
+skipped to see its share):
+
+| net | full | no GEMM | no transforms |
+| --- | --- | --- | --- |
+| 15b×192 | 627 / 665 | 1739 / 1758 | 1082 / 1106 |
+| 40b×256 | 143 / 151 | 462 / 479 | 227 / 257 |
+
+GEMM ≈ 65–70% of GPU time, transforms ≈ 30–35%. Batched GEMM alone (36
+elements, half × half → float, GPU timestamps, median of 20):
+
+| N×C×K | MPS | best custom (direct 2×2 simdgroups of 32×32) | best staged (64×64, BK 16/32) |
+| --- | --- | --- | --- |
+| 400×192×192 | 0.388 ms, 2.74 TFLOP/s | 0.93× | 0.70× |
+| 400×256×256 | 0.793 ms, 2.38 TFLOP/s | 0.84× | 0.76× |
+| 800×256×256 | 1.801 ms, 2.10 TFLOP/s | 0.94× | 0.88× |
+| 1600×256×256 | 3.035 ms, 2.49 TFLOP/s | 0.91× | 0.83× |
+
+No custom kernel beat MPS, so 2.11d stops here (ADR-009).
+
 ## Phase 2 soak (2026-10-05)
 
 `scripts/macos/soak.py --minutes 120 -t 16`, random 15b×192 network, Metal

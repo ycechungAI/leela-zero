@@ -181,6 +181,15 @@
   custom `simdgroup_matrix` GEMM (2.11d) is the remaining lever and needs a
   profile first. Winograd amplifies fp16 rounding (20×256: 8.0e-3 against the
   1e-2 limit), so the per-start accuracy check stays essential.
+- **Outcome (step 2.11d, 2026-10-05): custom GEMM not adopted.** A profile
+  (skipping stages) puts the GEMMs at ~65–70% of GPU time and the transforms
+  at ~30–35%; MPS's batched GEMM already runs at 2.1–2.7 TFLOP/s (fp16 in,
+  fp32 out). The go/no-go `simdgroup_matrix` kernels (direct and
+  threadgroup-staged, 8 tilings) reached 0.84–0.94× MPS on the 256-channel
+  shapes, so MPS stays. Even a GEMM at ~80% of peak would give at most ~1.3×,
+  i.e. ~1.75× OpenCL on 40b×256: the 2.5× target is out of reach on this path.
+  Earlier note: since the GEMM result moved to fp32 (`558de70`) the margin is
+  1.4–1.5× OpenCL, at a 7% cost for accuracy on real nets.
 - **Consequences:** Hand-written kernels to maintain (the OpenCL ones already
   exist as the template). Until it lands, OpenCL is about 1.33× faster than
   the default Metal backend on these nets, while Metal is 1.9× the CPU.
