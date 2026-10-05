@@ -776,7 +776,8 @@ TEST(MetalWinogradTest, MatchesCpuFp16) {
 // Many search threads, each input distinct: any mix-up between batch rows,
 // slots or waiting threads shows up as a wrong answer.
 static void run_concurrency_test(const MetalPrecision precision,
-                                 const float tolerance) {
+                                 const float tolerance,
+                                 const MetalEngine engine = MetalEngine::Graph) {
     constexpr auto C = 32;
     constexpr auto blocks = 2;
     constexpr auto threads = 12;
@@ -786,7 +787,7 @@ static void run_concurrency_test(const MetalPrecision precision,
     const auto weights = make_test_weights(C, blocks, rng);
     const auto cases = make_cases(weights, C, 37, rng);
 
-    MetalScheduler metal(4, 3, precision);
+    MetalScheduler metal(4, 3, precision, false, engine);
     metal.initialize(C);
     metal.push_weights(WINOGRAD_ALPHA, Network::INPUT_CHANNELS, C, weights);
 
@@ -829,6 +830,18 @@ TEST(MetalSchedulerTest, ConcurrentEvaluationsGetTheirOwnResults) {
 TEST(MetalSchedulerTest, ConcurrentEvaluationsInHalfPrecision) {
     SKIP_WITHOUT_METAL();
     run_concurrency_test(MetalPrecision::Half, 0.05f);
+}
+
+// The same checks through the Winograd engine, which has its own per-slot
+// scratch buffers and takes no lock in run().
+TEST(MetalSchedulerTest, ConcurrentEvaluationsWithWinograd) {
+    SKIP_WITHOUT_METAL();
+    run_concurrency_test(MetalPrecision::Single, 1e-4f, MetalEngine::Winograd);
+}
+
+TEST(MetalSchedulerTest, ConcurrentEvaluationsWithWinogradInHalfPrecision) {
+    SKIP_WITHOUT_METAL();
+    run_concurrency_test(MetalPrecision::Half, 0.05f, MetalEngine::Winograd);
 }
 
 // drain() releases every waiting thread with NetworkHaltException, and the
@@ -1029,7 +1042,8 @@ TEST(MetalTuningTest, NeuralEngineTriesFewerBatchSizes) {
     EXPECT_EQ(MetalTuning::candidate_batches(true), (std::vector<int>{8, 16}));
 }
 
-// The GPU part: every candidate batch size, both precisions, plausible numbers.
+// The GPU part: every candidate batch size, both precisions, plausible
+// numbers, for each engine.
 TEST(MetalTuningTest, MeasuresEveryCandidateOnTheGpu) {
     SKIP_WITHOUT_METAL();
     constexpr auto C = 16;
@@ -1040,15 +1054,75 @@ TEST(MetalTuningTest, MeasuresEveryCandidateOnTheGpu) {
     const auto ctx = MetalContext::create(error);
     ASSERT_NE(ctx, nullptr) << error;
 
-    auto reports = 0;
-    const auto m = MetalTuning::measure(
-        *ctx, C, blocks, *weights, 2, 0.01, false,
-        [&reports](const std::vector<Measurement>&) { reports++; });
-    EXPECT_EQ(reports, 4) << "one progress report per batch size";
-    EXPECT_EQ(m.size(), 8u);
-    for (const auto& r : m) {
-        EXPECT_GT(r.evals_per_sec, 0.0);
+    for (const auto engine : {MetalEngine::Graph, MetalEngine::Winograd}) {
+        auto reports = 0;
+        const auto m = MetalTuning::measure(
+            *ctx, C, blocks, *weights, 2, 0.01, false, engine,
+            [&reports](const std::vector<Measurement>&) { reports++; });
+        EXPECT_EQ(reports, 4) << "one progress report per batch size";
+        EXPECT_EQ(m.size(), 8u);
+        for (const auto& r : m) {
+            EXPECT_GT(r.evals_per_sec, 0.0);
+        }
+        EXPECT_NO_THROW(MetalTuning::choose(m, true, true));
     }
-    EXPECT_NO_THROW(MetalTuning::choose(m, true, true));
+}
+
+// The engine is part of the cache key, and rows written before engines existed
+// (six fields) are MPSGraph rows.
+TEST(MetalTuningTest, CacheKeepsEnginesApart) {
+    const auto path = temp_file("metal_tuning");
+    {
+        std::ofstream f(path);
+        f << "Apple M4\t192\t15\tsingle\t8\t350.0\n"; // legacy: MPSGraph
+    }
+    const MetalTuning::Cache cache(path);
+    const MetalTuning::Key graph{"Apple M4", 192, 15, false, MetalEngine::Graph};
+    const MetalTuning::Key winograd{"Apple M4", 192, 15, false,
+                                    MetalEngine::Winograd};
+    const MetalTuning::Key ane{"Apple M4", 192, 15, true, MetalEngine::Graph};
+
+    std::vector<Measurement> out;
+    ASSERT_TRUE(cache.load(graph, out)) << "legacy rows are MPSGraph";
+    EXPECT_EQ(out.size(), 1u);
+    EXPECT_FALSE(cache.load(winograd, out));
+
+    ASSERT_TRUE(cache.store(winograd, {S(16, 410.0), H(16, 590.0)}));
+    ASSERT_TRUE(cache.load(winograd, out));
+    ASSERT_EQ(out.size(), 2u);
+    EXPECT_EQ(out[1].precision, MetalPrecision::Half);
+    EXPECT_NEAR(out[1].evals_per_sec, 590.0, 0.06);
+    ASSERT_TRUE(cache.load(graph, out)) << "the MPSGraph rows survive";
+    EXPECT_EQ(out.size(), 1u);
+    EXPECT_FALSE(cache.load(ane, out)) << "ANE is a third key";
+    std::filesystem::remove_all(std::filesystem::path(path).parent_path());
+}
+
+// Winograd needs to be at least 5% faster, or MPSGraph stays.
+TEST(MetalTuningTest, ChoosesTheEngine) {
+    const auto choice = [](const double eps) {
+        MetalTuning::Choice c{MetalPrecision::Half, 8, eps};
+        return c;
+    };
+    const auto faster = MetalTuning::choose_engine(choice(400), choice(600));
+    EXPECT_EQ(faster.engine, MetalEngine::Winograd);
+    EXPECT_DOUBLE_EQ(faster.evals_per_sec, 600.0);
+
+    EXPECT_EQ(MetalTuning::choose_engine(choice(400), choice(419)).engine,
+              MetalEngine::Graph) << "less than 5% is a tie";
+    EXPECT_EQ(MetalTuning::choose_engine(choice(400), choice(421)).engine,
+              MetalEngine::Winograd);
+    EXPECT_EQ(MetalTuning::choose_engine(choice(400), choice(300)).engine,
+              MetalEngine::Graph);
+}
+
+// choose() reports the throughput of the configuration it picked.
+TEST(MetalTuningTest, ChoiceCarriesItsThroughput) {
+    const std::vector<Measurement> m{S(8, 900), S(16, 1000), H(8, 1500),
+                                     H(16, 1550)};
+    const auto c = MetalTuning::choose(m, true, true);
+    EXPECT_EQ(c.precision, MetalPrecision::Half);
+    EXPECT_EQ(c.batch, 8);
+    EXPECT_DOUBLE_EQ(c.evals_per_sec, 1500.0);
 }
 #endif

@@ -544,48 +544,79 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         static_cast<int>((m_fwd_weights->m_conv_weights.size() - 1) / 2);
     constexpr auto workers = MetalScheduler::DEFAULT_WORKERS;
 
+    // The engines that may compute the tower. The Neural Engine runs through
+    // MPSGraph.
+    std::vector<MetalEngine> engines;
+    if (cfg_ane || cfg_metal_kernels == metal_kernels_t::MPSGRAPH) {
+        engines = {MetalEngine::Graph};
+    } else if (cfg_metal_kernels == metal_kernels_t::WINOGRAD) {
+        engines = {MetalEngine::Winograd};
+    } else {
+        engines = {MetalEngine::Graph, MetalEngine::Winograd};
+    }
+    const auto engine_name = [](const MetalEngine e) {
+        return e == MetalEngine::Winograd ? "Winograd" : "MPSGraph";
+    };
+
+    // Measurements are needed to pick the batch size, or the engine, or both.
     std::optional<MetalTuning::Choice> tuned;
-    if (cfg_autotune_batch || cfg_tune_only) {
+    if (cfg_autotune_batch || cfg_tune_only || engines.size() > 1) {
         std::string error;
         const auto context = MetalContext::create(error);
         if (!context) {
             throw std::runtime_error("Metal: " + error);
         }
-        const MetalTuning::Key key{context->device_name(), channels, blocks,
-                                   cfg_ane};
         const MetalTuning::Cache cache(MetalTuning::Cache::default_path());
-        std::vector<MetalTuning::Measurement> table;
-        const auto shape = key.device + ", " + std::to_string(channels)
-                           + " channels, " + std::to_string(blocks)
-                           + " blocks";
-        auto print_table = true;
-        if (!cfg_tune_only && cache.load(key, table)) {
-            myprintf("Metal autotune: cached measurements for %s.\n",
-                     shape.c_str());
-            print_table = false;
-        } else {
-            myprintf("Metal autotune: measuring %s%s (once per network "
-                     "shape)...\n",
-                     shape.c_str(), cfg_ane ? ", Neural Engine" : "");
-            table = MetalTuning::measure(*context, channels, blocks,
-                                         *m_fwd_weights, workers, 0.25,
-                                         cfg_ane, {});
-            if (!cache.store(key, table)) {
-                myprintf("Metal autotune: could not save the measurements to "
-                         "%s.\n",
-                         MetalTuning::Cache::default_path().c_str());
+        const auto shape = context->device_name() + ", "
+                           + std::to_string(channels) + " channels, "
+                           + std::to_string(blocks) + " blocks";
+        std::vector<MetalTuning::Choice> choices;
+        for (const auto engine : engines) {
+            const MetalTuning::Key key{context->device_name(), channels,
+                                       blocks, cfg_ane, engine};
+            std::vector<MetalTuning::Measurement> table;
+            auto print_table = true;
+            if (!cfg_tune_only && cache.load(key, table)) {
+                myprintf("Metal autotune: cached measurements for %s, %s.\n",
+                         shape.c_str(), engine_name(engine));
+                print_table = false;
+            } else {
+                myprintf("Metal autotune: measuring %s, %s%s (once per "
+                         "network shape)...\n",
+                         shape.c_str(), engine_name(engine),
+                         cfg_ane ? ", Neural Engine" : "");
+                table = MetalTuning::measure(*context, channels, blocks,
+                                             *m_fwd_weights, workers, 0.25,
+                                             cfg_ane, engine, {});
+                if (!cache.store(key, table)) {
+                    myprintf("Metal autotune: could not save the measurements "
+                             "to %s.\n",
+                             MetalTuning::Cache::default_path().c_str());
+                }
             }
-        }
-        if (print_table) {
-            myprintf("%s", MetalTuning::format_table(table).c_str());
+            if (print_table) {
+                myprintf("%s", MetalTuning::format_table(table).c_str());
+            }
+            if (!cfg_tune_only) {
+                auto choice = MetalTuning::choose(
+                    table, cfg_precision != precision_t::HALF,
+                    cfg_precision != precision_t::SINGLE);
+                choice.engine = engine;
+                choices.push_back(choice);
+            }
         }
         if (cfg_tune_only) {
             myprintf("Measurements saved to %s.\n",
                      MetalTuning::Cache::default_path().c_str());
             exit(EXIT_SUCCESS);
         }
-        tuned = MetalTuning::choose(table, cfg_precision != precision_t::HALF,
-                                    cfg_precision != precision_t::SINGLE);
+        tuned = choices.size() == 2
+                    ? MetalTuning::choose_engine(choices[0], choices[1])
+                    : choices[0];
+        myprintf("Metal autotune: %s, %s, %.0f evals/s at batch %d.\n",
+                 engine_name(tuned->engine),
+                 tuned->precision == MetalPrecision::Half ? "fp16" : "fp32",
+                 tuned->evals_per_sec, tuned->batch);
         if (cfg_autotune_batch) {
             cfg_batch_size = tuned->batch;
             cfg_num_threads = std::min<size_t>(MAX_CPUS, tuned->batch * workers);
@@ -593,11 +624,13 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
                      cfg_num_threads);
         }
     }
+    const auto engine = tuned ? tuned->engine : engines[0];
 
-    const auto make = [this, channels](const MetalPrecision precision,
+    const auto make = [this, channels, engine](const MetalPrecision precision,
                                        const bool ane = false) {
         auto pipe = std::make_unique<MetalScheduler>(
-            cfg_batch_size, MetalScheduler::DEFAULT_WORKERS, precision, ane);
+            cfg_batch_size, MetalScheduler::DEFAULT_WORKERS, precision, ane,
+            engine);
         pipe->initialize(channels);
         pipe->push_weights(WINOGRAD_ALPHA, INPUT_CHANNELS, channels,
                            m_fwd_weights);

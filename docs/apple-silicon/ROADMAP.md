@@ -70,8 +70,10 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 9. ✅ Benchmark. MPSGraph is 0.75× OpenCL (target 2–2.5×), so the custom MSL
    Winograd fallback starts (ADR-009). Also fixed an OpenCL startup hang found
    here.
-11. 🔄 `MetalWinograd`: MSL Winograd transforms + `simdgroup_matrix` batched
-    GEMM behind `MetalScheduler`, autotuned against MPSGraph (ADR-009).
+11. 🔄 `MetalWinograd`: MSL Winograd transforms + batched GEMM behind
+    `MetalScheduler`, autotuned against MPSGraph (ADR-009). ✅ 2.11a–c done:
+    Winograd fp16 is the default, 1.5× OpenCL and 2× the old Metal default. The
+    spec's 2–2.5× OpenCL target is open (custom GEMM 2.11d, fusions 2.11e).
     Plan: [12-plan-2.11-metal-winograd.md](12-plan-2.11-metal-winograd.md).
 10. 🟡 CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU) ✅;
     nightly `parity-full` and Metal `asan` still to do.

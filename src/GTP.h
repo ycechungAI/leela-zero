@@ -109,6 +109,10 @@ extern bool cfg_tune_only;
 extern bool cfg_autotune_batch;
 // --ane: run the fp16 tower on the Neural Engine. Off by default.
 extern bool cfg_ane;
+// --metal-kernels: how the tower is computed. Auto lets autotune choose
+// between MPSGraph and the Winograd kernels.
+enum class metal_kernels_t { AUTO, MPSGRAPH, WINOGRAD };
+extern metal_kernels_t cfg_metal_kernels;
 #endif
 #if defined(USE_HALF) || defined(USE_METAL)
 enum class precision_t {

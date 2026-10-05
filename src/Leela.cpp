@@ -237,6 +237,9 @@ static void parse_commandline(const int argc, const char* const argv[]) {
                       "Default is to auto which automatically determines which one to use.")
 #endif
 #ifdef USE_METAL
+        ("metal-kernels", po::value<std::string>(),
+                          "Metal: how the network is computed: auto, mpsgraph or winograd.\n"
+                          "Default is auto: autotune measures both and takes the faster.")
         ("ane", "Metal: run the fp16 network on the Neural Engine (experimental).\n"
                 "Needs fp16 (--precision half, or auto when fp16 is chosen). The first run\n"
                 "of a network compiles for several minutes; off by default.")
@@ -419,12 +422,29 @@ static void parse_commandline(const int argc, const char* const argv[]) {
     select_backend(vm);
 
 #ifdef USE_METAL
+    if (vm.count("metal-kernels")) {
+        const auto kernels = vm["metal-kernels"].as<std::string>();
+        if (kernels == "auto") {
+            cfg_metal_kernels = metal_kernels_t::AUTO;
+        } else if (kernels == "mpsgraph") {
+            cfg_metal_kernels = metal_kernels_t::MPSGRAPH;
+        } else if (kernels == "winograd") {
+            cfg_metal_kernels = metal_kernels_t::WINOGRAD;
+        } else {
+            printf("Unexpected option for --metal-kernels, expecting "
+                   "auto/mpsgraph/winograd\n");
+            exit(EXIT_FAILURE);
+        }
+    }
     if (vm.count("ane")) {
         if (cfg_backend != backend_t::METAL) {
             fprintf(stderr, "Ignoring --ane: it needs the Metal backend.\n");
         } else if (cfg_precision == precision_t::SINGLE) {
             fprintf(stderr, "Ignoring --ane: the Neural Engine runs fp16 only, "
                             "but --precision single was given.\n");
+        } else if (cfg_metal_kernels == metal_kernels_t::WINOGRAD) {
+            fprintf(stderr, "Ignoring --ane: the Neural Engine runs through "
+                            "MPSGraph, but --metal-kernels winograd was given.\n");
         } else {
             cfg_ane = true;
         }

@@ -133,6 +133,33 @@ Found while running this: OpenCL builds hung at startup since step 2.7 (the
 thread pool was created after the network, but OpenCL's precision autodetect
 runs on it). Fixed in `d0ebb96`, and CI now starts the OpenCL binary.
 
+## Phase 2 step 2.11c: Winograd by default (autotune picks the engine) (2026-10-05)
+
+Autotune now measures both engines (MPSGraph and Winograd) × both precisions ×
+batch 8/16/32/64 per network shape, takes Winograd only if it is at least 5%
+faster, and `--metal-kernels auto|mpsgraph|winograd` can force one. Default
+run (`--benchmark`, autotuned, cache warm), medians of 3 interleaved rounds,
+n/s:
+
+| Network | New default | Autotune's choice | MPSGraph only (the old default) | OpenCL (B16, 32 thr) | CPU (10 thr) | ÷ OpenCL | ÷ old default | ÷ CPU |
+|---------|---:|---|---:|---:|---:|---:|---:|---:|
+| random 15b×192 | **795** | Winograd fp16, batch 16 | 400 | 508 | 226 | **1.57×** | 1.99× | 3.5× |
+| random 40b×256 | **170** | Winograd fp16, batch 32 | 83 | 112 | 51 | **1.52×** | 2.05× | 3.3× |
+
+- Raw GPU throughput per engine (15b×192, evals/s at the best batch size):
+  MPSGraph 381 (fp16) vs Winograd 726 (fp16) and 491 (fp32).
+- The spec targets are still open: 2× OpenCL on 15b×192 and 2.5× on 40b×256.
+  The default is at 1.5× on both. What is left is the GEMM (Apple's stock
+  `MPSMatrixMultiplication` at about a third of the GPU's fp16 peak, estimated
+  from the 8.6 GFLOP of Winograd multiplies per 40b×256 evaluation) and the
+  transforms (memory bound); step 2.11d (custom `simdgroup_matrix` GEMM) or
+  2.11e (fusions) would go after them, after a profile.
+- G2 on 3 shapes × both engines × both precisions, all pass. fp16 Winograd on
+  20×256: 8.0e-3 against the 1e-2 limit (MPSGraph 4.1e-3).
+- Sanitizers: ASan/UBSan 36 tests clean; TSan 0 warnings on the 22 Metal tests
+  and on real 16-thread searches through the Winograd engine in both
+  precisions.
+
 ## Phase 2 step 2.11b: Winograd engine, fp16 storage (2026-10-05)
 
 Weights, V, M and activations in fp16; the transforms compute in float
@@ -357,6 +384,7 @@ in step 2.4.
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 15b×192, 3 positions × 8 symmetries | 3.7e-7 | 0 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 6b×64, same | 2.8e-9 | 1.2e-7 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized (Accelerate) vs Eigen 3.4 | random 15b×192, same | 3.4e-7 | 0 | PASS (tol 1e-5) |
+| G2 | Metal Winograd vs CPU, fp32 and fp16 | random 6×64, 15×192, 20×256, 100 positions × 8 symmetries | fp32 ≤ 6.8e-6; fp16 ≤ 8.0e-3 (20×256) | — | PASS (1e-4 / N6 1e-2) |
 | G2 | Metal fp16 vs CPU (`--cpu-only`) | random 15b×192, 3 positions × 8 symmetries | 3.4e-4 | 2.5e-5 | PASS (N6: 1e-2 / 5e-3) |
 | G2 | Metal fp16 vs CPU (`--cpu-only`) | random 6b×64, same | 3.2e-6 | 1.1e-4 | PASS (N6: 1e-2 / 5e-3) |
 | G2 | Metal fp32 vs CPU (`--cpu-only`) | random 6b×64, 3 positions × 8 symmetries | 3.0e-9 | 1.8e-7 | PASS (tol 1e-4) |

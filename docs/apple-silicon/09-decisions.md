@@ -149,6 +149,10 @@
   temporary file and are renamed, and unreadable rows are skipped, so a
   crashed or concurrent process cannot corrupt it. A user-fixed `--batchsize`
   or `-t` skips the table and times fp32/fp16 at that batch size instead.
+- **Addendum (step 2.11c):** the key also holds the engine (MPSGraph or
+  Winograd), stored as an optional seventh field; rows without it are
+  MPSGraph rows, so existing caches keep working and only the Winograd
+  measurements are new.
 - **Consequences:** Starts are fast after the first, and a new training
   generation costs nothing extra. The thread pool is created after the network
   because autotune can change the thread count. The cache is not invalidated
@@ -170,6 +174,13 @@
   fp32. Keep the MPSGraph network as the correctness reference and as an
   autotune candidate; autotune picks whichever is faster per shape. Gates as
   for MPSGraph: G2 at fp32 1e-4 and fp16 N6, the concurrency tests, ASan/TSan.
+- **Outcome (steps 2.11a–c, 2026-10-05):** Winograd with Apple's stock batched
+  matrix multiply and fp16 storage reaches 1.57× OpenCL on 15b×192 and 1.52×
+  on 40b×256 at the autotuned defaults (about 2× the MPSGraph default), and is
+  now the autotune choice. The spec's 2× / 2.5× targets are not met yet; the
+  custom `simdgroup_matrix` GEMM (2.11d) is the remaining lever and needs a
+  profile first. Winograd amplifies fp16 rounding (20×256: 8.0e-3 against the
+  1e-2 limit), so the per-start accuracy check stays essential.
 - **Consequences:** Hand-written kernels to maintain (the OpenCL ones already
   exist as the template). Until it lands, OpenCL is about 1.33× faster than
   the default Metal backend on these nets, while Metal is 1.9× the CPU.

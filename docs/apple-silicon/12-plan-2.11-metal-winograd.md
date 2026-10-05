@@ -177,8 +177,8 @@ bugs.
 - The residual add writes in place: each output pixel is read and written by
   one thread, so the block's output buffer is also its residual input.
 - Kernels live in `src/metal/WinogradKernels.h`, the host side in
-  `MetalWinograd.{h,mm}`. The engine is chosen with the temporary env var
-  `LZ_METAL_ENGINE=winograd` until 2.11c.
+  `MetalWinograd.{h,mm}`. The engine is chosen by autotune, or with
+  `--metal-kernels` (2.11c); the temporary env var is gone.
 
 ## 3. Pitfalls
 

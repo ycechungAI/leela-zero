@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Gate G2 on several network shapes: Metal vs the CPU reference, in fp32
-# (tolerance 1e-4) and fp16 (N6: policy 1e-2, value 5e-3), on 100 positions x
-# 8 symmetries per shape. Networks are random-weight stand-ins until real
+# Gate G2 on several network shapes and both Metal engines (MPSGraph and
+# Winograd): Metal vs the CPU reference, in fp32 (tolerance 1e-4) and fp16 (N6:
+# policy 1e-2, value 5e-3), on 100 positions x 8 symmetries per row. Networks are random-weight stand-ins until real
 # ones are fetched (docs/apple-silicon/07-spec-testing-benchmarks.md).
 #
 #   scripts/parity/full_gate.sh [--leelaz PATH] [--shapes "6x64 15x192 20x256"]
-#                               [--games N] [--workdir DIR]
+#                               [--engines "mpsgraph winograd"] [--games N]
+#                               [--workdir DIR]
 #
 # Defaults: build-metal/leelaz, 5 games (20 positions each), a temp workdir.
 # Exit status is non-zero if any comparison fails.
@@ -15,15 +16,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 LEELAZ="$ROOT/build-metal/leelaz"
 SHAPES="6x64 15x192 20x256"
+ENGINES="mpsgraph winograd"
 GAMES=5
 WORK=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --leelaz)  LEELAZ="$2"; shift 2 ;;
         --shapes)  SHAPES="$2"; shift 2 ;;
+        --engines) ENGINES="$2"; shift 2 ;;
         --games)   GAMES="$2"; shift 2 ;;
         --workdir) WORK="$2"; shift 2 ;;
-        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -39,7 +42,7 @@ SUMMARY=""
 record() {  # name, status, output
     local first
     first="$(echo "$3" | grep -E 'max \|d prior\|' | head -1 | sed 's/  */ /g')"
-    SUMMARY+="$(printf '%-34s %-5s %s\n' "$1" "$2" "$first")"$'\n'
+    SUMMARY+="$(printf '%-38s %-5s %s\n' "$1" "$2" "$first")"$'\n'
     [[ "$2" == PASS ]] || { FAILED=1; echo "$3"; }
 }
 
@@ -64,11 +67,15 @@ for shape in $SHAPES; do
             -o "$WORK/positions" -n "$GAMES" -v 2 -t 1 >/dev/null
         touch "$WORK/positions/.done"
     fi
-    echo "== $shape: G2 fp32" >&2
-    gate "G2 fp32 $shape (tol 1e-4)" "$net" "--precision single" --tol 1e-4
-    echo "== $shape: G2 fp16" >&2
-    gate "G2 fp16 $shape (N6 1e-2/5e-3)" "$net" "--precision half" \
-        --tol 1e-2 --tol-value 5e-3
+    for engine in $ENGINES; do
+        echo "== $shape, $engine: G2 fp32" >&2
+        gate "G2 fp32 $shape $engine (1e-4)" "$net" \
+            "--metal-kernels $engine --precision single" --tol 1e-4
+        echo "== $shape, $engine: G2 fp16" >&2
+        gate "G2 fp16 $shape $engine (N6)" "$net" \
+            "--metal-kernels $engine --precision half" \
+            --tol 1e-2 --tol-value 5e-3
+    done
     rm -f "$net"
 done
 

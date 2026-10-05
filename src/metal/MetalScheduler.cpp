@@ -34,10 +34,12 @@ constexpr auto VAL_SIZE = Network::OUTPUTS_VALUE * PLANE;
 } // namespace
 
 MetalScheduler::MetalScheduler(const int max_batch, const int workers,
-                               const MetalPrecision precision, const bool ane)
+                               const MetalPrecision precision, const bool ane,
+                               const MetalEngine engine)
     : m_max_batch(std::max(1, max_batch)),
       m_workers(std::max(1, workers)),
       m_precision(precision),
+      m_engine(engine),
       m_ane(ane && precision == MetalPrecision::Half) {}
 
 MetalScheduler::~MetalScheduler() {
@@ -64,15 +66,9 @@ void MetalScheduler::push_weights(
     // those are the only two graphs needed.
     const auto blocks =
         static_cast<int>((weights->m_conv_weights.size() - 1) / 2);
-    // TEMP until step 2.11c adds --metal-kernels and autotune: choose the
-    // Winograd engine with LZ_METAL_ENGINE=winograd (used by the parity gate).
-    const auto* const engine_env = std::getenv("LZ_METAL_ENGINE");
-    const auto engine = engine_env && std::string(engine_env) == "winograd"
-                            ? MetalEngine::Winograd
-                            : MetalEngine::Graph;
     m_network = std::make_unique<MetalNetwork>(
         *m_context, static_cast<int>(outputs), blocks, *weights,
-        std::vector<int>{1, m_max_batch}, m_precision, m_ane, engine);
+        std::vector<int>{1, m_max_batch}, m_precision, m_ane, m_engine);
     for (auto i = 0; i < m_workers; i++) {
         m_threads.emplace_back(&MetalScheduler::worker, this);
     }
@@ -101,7 +97,9 @@ double MetalScheduler::benchmark(const int runs) const {
 }
 
 std::string MetalScheduler::describe() const {
-    return m_context->describe() + ", MPSGraph, "
+    return m_context->describe() + ", "
+           + (m_engine == MetalEngine::Winograd ? "Winograd" : "MPSGraph")
+           + ", "
            + (m_precision == MetalPrecision::Half ? "fp16" : "fp32")
            + (m_ane ? " (Neural Engine)" : "") + ", batch "
            + std::to_string(m_max_batch) + ", " + std::to_string(m_workers)
