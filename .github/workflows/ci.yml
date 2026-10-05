@@ -125,8 +125,10 @@ jobs:
       - name: Parity gate G2 (Metal vs CPU)
         if: steps.probe.outputs.metal == 'yes'
         run: |
-          python3 scripts/macos/selfplay.py --leelaz build-metal/leelaz -w net.txt \
-              -o positions -n 1 -v 2
+          # Positions come from a CPU game, so the step does not depend on the
+          # runner's virtual GPU speed (a GPU game once took 21 minutes).
+          python3 scripts/macos/selfplay.py --leelaz "build-metal/leelaz --backend cpu" \
+              -w net.txt -o positions -n 1 -v 2
           python3 scripts/parity/compare_backends.py \
               --ref "build-metal/leelaz --backend cpu" \
               --test "build-metal/leelaz --precision single" \
