@@ -67,6 +67,13 @@ for shape in $SHAPES; do
     echo "== $shape: making a random network" >&2
     python3 "$ROOT/scripts/macos/make_random_net.py" "$net" \
         --blocks "$blocks" --filters "$filters" >/dev/null
+    # A Metal failure falls back to the CPU, which would make every row a
+    # CPU-vs-CPU pass: check that the Metal pipe really started.
+    started="$(printf 'quit\n' | "$LEELAZ" --backend metal -w "$net" --gtp 2>&1 || true)"
+    if ! grep -q '^Metal: .* workers\.$' <<<"$started"; then
+        echo "Metal did not start on $shape (fell back to the CPU?)" >&2
+        exit 1
+    fi
     if [[ ! -e "$WORK/positions/.done" ]]; then
         echo "== playing $GAMES games for positions" >&2
         python3 "$ROOT/scripts/macos/selfplay.py" --leelaz "$LEELAZ" -w "$net" \

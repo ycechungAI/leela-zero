@@ -15,6 +15,7 @@ winrate), 1 otherwise.
 """
 import argparse
 import glob
+import math
 import os
 import shlex
 import sys
@@ -63,7 +64,7 @@ def main():
     test = Engine(args.test, args.test_weights or args.weights)
     worst_p = worst_v = worst_rel = 0.0
     worst_at = None
-    n = 0
+    n = nonfinite = 0
     try:
         for sgf, move in positions:
             for e in (ref, test):
@@ -75,6 +76,10 @@ def main():
                 v_t, p_t = test.eval(s)
                 dp = max(abs(a - b) for a, b in zip(p_r, p_t))
                 dv = abs(v_r - v_t)
+                # max() and ">" ignore NaN, so count non-finite outputs apart.
+                if not all(math.isfinite(x) for x in [v_r, v_t] + p_r + p_t):
+                    nonfinite += 1
+                    worst_at = worst_at or (sgf or "empty board", move, s)
                 # Relative diff on priors that matter (>1e-4), for near-uniform nets.
                 worst_rel = max([worst_rel] + [abs(a - b) / max(a, b) for a, b in zip(p_r, p_t)
                                                if max(a, b) > 1e-4])
@@ -86,7 +91,9 @@ def main():
         ref.close()
         test.close()
 
-    ok = worst_p <= args.tol and worst_v <= tol_v
+    ok = nonfinite == 0 and worst_p <= args.tol and worst_v <= tol_v
+    if nonfinite:
+        print("non-finite outputs in %d evaluations" % nonfinite)
     print("evaluations: %d (%d positions x %d symmetries)" % (n, len(positions), len(syms)))
     print("max |d prior|   = %.3g (tol %.3g)" % (worst_p, args.tol))
     print("max |d winrate| = %.3g (tol %.3g)" % (worst_v, tol_v))

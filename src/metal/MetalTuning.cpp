@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 
@@ -222,7 +223,10 @@ bool Cache::store(const Key& key,
         }
         // Write a temporary file and rename it, so a crash or a second
         // process never leaves a half-written cache.
-        const auto temp = path.string() + ".tmp." + std::to_string(std::rand());
+        // Unique per process: std::rand() is never seeded, so it would give
+        // concurrent processes the same name.
+        const auto temp =
+            path.string() + ".tmp." + std::to_string(std::random_device{}());
         {
             std::ofstream out(temp, std::ios::trunc);
             if (!out) {

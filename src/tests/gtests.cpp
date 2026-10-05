@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <memory>
@@ -47,6 +48,11 @@
 #include "ThreadPool.h"
 #include "Utils.h"
 #include "Zobrist.h"
+
+#ifdef USE_METAL
+#include <filesystem>
+#include <unistd.h>
+#endif
 
 using namespace Utils;
 
@@ -70,6 +76,17 @@ public:
     void SetUp() {
         GTP::setup_default_parameters();
         cfg_gtp_mode = true;
+#ifdef USE_METAL
+        // Network::initialize below may autotune Metal: keep its measurements
+        // out of the user's cache (~/Library/Application Support/leela-zero).
+        if (std::getenv("LZ_METAL_TUNING_FILE") == nullptr) {
+            static const auto path =
+                std::filesystem::temp_directory_path()
+                / ("leelaz-test-metal-tuning-" + std::to_string(getpid()));
+            setenv("LZ_METAL_TUNING_FILE", path.c_str(), 1);
+            std::atexit([] { std::filesystem::remove(path); });
+        }
+#endif
 
         // Setup global objects after command line has been parsed
         thread_pool.initialize(cfg_num_threads);

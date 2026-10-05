@@ -41,8 +41,8 @@ jobs:
         run: |
           python3 scripts/macos/make_random_net.py net.txt --blocks 2 --filters 16
           log=$(printf 'quit\n' | build-metal/leelaz -w net.txt --gtp --backend metal 2>&1 || true)
-          if echo "$log" | grep -q '^Metal: '; then
-            echo "$log" | grep '^Metal: '
+          if echo "$log" | grep -q '^Metal: .* workers\.$'; then
+            echo "$log" | grep '^Metal: .* workers\.$'
             echo "metal=yes" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::No usable Metal device on this runner; parity not run"

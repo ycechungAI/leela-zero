@@ -20,7 +20,8 @@
 #define WINOGRADKERNELS_H_INCLUDED
 
 // Metal Shading Language source for the Winograd F(4x4, 3x3) network, compiled
-// at runtime by MetalWinograd.mm after it prepends
+// at runtime by MetalWinograd.mm after it prepends the board geometry
+// (BOARD, PLANE, WTILES, TILES) and
 //   #define store_t float   (or half)   activations, V, U
 //   #define mstore_t float                GEMM output M (always float)
 // Layouts, per Winograd element e = 0..35 (row-major matrices):
@@ -35,10 +36,7 @@ static const char* const WINOGRAD_MSL = R"MSL(
 using namespace metal;
 
 constant float SQ2 = 1.4142135623730951f;
-constant int BOARD = 19;
-constant int PLANE = 361;
-constant int WTILES = 5;
-constant int TILES = 25;
+// BOARD, PLANE, WTILES and TILES are defined by the host from config.h.
 
 struct Params {
     int C;   // input channels of this layer
@@ -74,7 +72,7 @@ inline void at6(float i0, float i1, float i2, float i3, float i4, float i5,
     o[3] = t1m2 + t3m4 + t3m4 + i5;
 }
 
-// src: [batch][C][361]; the network input is float, activations are store_t.
+// src: [batch][C][PLANE]; the network input is float, activations are store_t.
 // One thread per (channel, tile); channel is the fastest index so that the
 // writes to V are coalesced.
 // Tag only keeps the two instantiations distinct when store_t is float.

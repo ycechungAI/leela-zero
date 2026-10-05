@@ -160,7 +160,11 @@ WinogradNet::WinogradNet(id<MTLDevice> device, id<MTLCommandQueue> queue,
 
     @autoreleasepool {
         NSString* source = [NSString
-            stringWithFormat:@"#define store_t %s\n#define mstore_t float\n%s",
+            stringWithFormat:@"#define BOARD %d\n#define PLANE %d\n"
+                              "#define WTILES %d\n#define TILES %d\n"
+                              "#define store_t %s\n#define mstore_t float\n%s",
+                             BOARD_SIZE, NUM_INTERSECTIONS, WINOGRAD_WTILES,
+                             WINOGRAD_P,
                              precision == MetalPrecision::Single ? "float"
                                                                  : "half",
                              WINOGRAD_MSL];
