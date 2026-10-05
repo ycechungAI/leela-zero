@@ -763,6 +763,16 @@ TEST(MetalWinogradTest, MatchesCpuFp32) {
     check_winograd(64, 2, 8, 14, MetalPrecision::Single, 1e-4f);
 }
 
+// fp16 storage: close to the CPU, with a bound that rounding fits in but a
+// wrong cast, layout or accumulation (order-1 errors, or growth with C) does
+// not. C = 256 checks that the matrix multiply accumulates in fp32.
+TEST(MetalWinogradTest, MatchesCpuFp16) {
+    SKIP_WITHOUT_METAL();
+    check_winograd(32, 3, 4, 22, MetalPrecision::Half, 2e-2f);
+    check_winograd(17, 2, 3, 23, MetalPrecision::Half, 2e-2f);
+    check_winograd(256, 2, 4, 24, MetalPrecision::Half, 2e-2f);
+}
+
 // Many search threads, each input distinct: any mix-up between batch rows,
 // slots or waiting threads shows up as a wrong answer.
 static void run_concurrency_test(const MetalPrecision precision,

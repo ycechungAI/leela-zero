@@ -59,6 +59,23 @@ id<MTLBuffer> buffer_with(id<MTLDevice> device, const std::vector<float>& data) 
     return buffer;
 }
 
+// The same values rounded to fp16.
+id<MTLBuffer> half_buffer_with(id<MTLDevice> device,
+                               const std::vector<float>& data) {
+    std::vector<_Float16> half(data.size());
+    for (auto i = std::size_t{0}; i < data.size(); i++) {
+        half[i] = static_cast<_Float16>(data[i]);
+    }
+    id<MTLBuffer> buffer =
+        [device newBufferWithBytes:half.data()
+                            length:half.size() * sizeof(_Float16)
+                           options:MTLResourceStorageModeShared];
+    if (buffer == nil) {
+        throw std::runtime_error("Metal: could not allocate a buffer");
+    }
+    return buffer;
+}
+
 // `matrices` row-major matrices of rows x columns, back to back.
 MPSMatrix* matrix_view(id<MTLBuffer> buffer, const int rows, const int columns,
                        const int matrices, const NSUInteger element_bytes,
@@ -128,11 +145,9 @@ WinogradNet::WinogradNet(id<MTLDevice> device, id<MTLCommandQueue> queue,
       m_queue(queue),
       m_channels(channels),
       m_blocks(blocks),
-      m_store_bytes(4),
-      m_store_type(MPSDataTypeFloat32) {
-    if (precision != MetalPrecision::Single) {
-        throw std::runtime_error("Metal: Winograd fp16 is not implemented yet");
-    }
+      m_store_bytes(precision == MetalPrecision::Half ? 2 : 4),
+      m_store_type(precision == MetalPrecision::Half ? MPSDataTypeFloat16
+                                                     : MPSDataTypeFloat32) {
     const auto layers = 1 + 2 * blocks;
     if (weights.m_conv_weights.size() != static_cast<std::size_t>(layers)
         || weights.m_batchnorm_means.size() != static_cast<std::size_t>(layers)
@@ -173,7 +188,12 @@ WinogradNet::WinogradNet(id<MTLDevice> device, id<MTLCommandQueue> queue,
                 throw std::runtime_error(
                     "Metal: unexpected convolution weight shape");
             }
-            m_u.push_back(buffer_with(device, u));
+            // Weights, V, M and the activations are stored in the chosen
+            // precision; the transforms compute in float, and the heads and
+            // the batch norm constants stay fp32.
+            m_u.push_back(precision == MetalPrecision::Half
+                              ? half_buffer_with(device, u)
+                              : buffer_with(device, u));
             m_u_mat.push_back(matrix_view(m_u.back(), in_ch, channels,
                                           ELEMENTS, m_store_bytes,
                                           m_store_type));

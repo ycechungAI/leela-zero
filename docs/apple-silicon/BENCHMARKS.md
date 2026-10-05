@@ -133,6 +133,31 @@ Found while running this: OpenCL builds hung at startup since step 2.7 (the
 thread pool was created after the network, but OpenCL's precision autodetect
 runs on it). Fixed in `d0ebb96`, and CI now starts the OpenCL binary.
 
+## Phase 2 step 2.11b: Winograd engine, fp16 storage (2026-10-05)
+
+Weights, V, M and activations in fp16; the transforms compute in float
+registers, the heads and batch norm stay fp32, and `MPSMatrixMultiplication`
+multiplies fp16 matrices. Same protocol as 2.11a, medians of 3, n/s.
+
+| Network | OpenCL (B16, 32 thr) | MPSGraph fp16 (B8) | Winograd fp32 (B16) | Winograd fp16 (B8) | Winograd fp16 (B16) | fp16 B16 ÷ OpenCL | ÷ MPSGraph fp16 |
+|---------|---:|---:|---:|---:|---:|---:|---:|
+| random 15b×192 | 395 | 319 | 378 | 593 | **591** | **1.50×** | 1.85× |
+| random 40b×256 | 99 | 73 | 100 | 150 | **150** | **1.52×** | 2.05× |
+
+- fp16 is worth 1.5× over Winograd fp32 here (the engine is memory-bound,
+  not math-bound), and it makes Metal 1.5× OpenCL on both sizes. The spec
+  target is 2× / 2.5×; the remaining gap is what the custom GEMM (2.11d) goes
+  after.
+- Accuracy: the unit test is within 1.3–2.1e-3 of the CPU (0.1% of the
+  output scale) for C = 17, 32 and **256**; the error does not grow with C, so
+  MPS accumulates in fp32. G2 at the N6 tolerances (policy 1e-2, value 5e-3):
+  6×64 1.2e-5, 15×192 1.8e-3, **20×256 8.0e-3** (MPSGraph fp16: 4.5e-3).
+  Winograd amplifies fp16 rounding more, so the margin on large nets is thin:
+  `--precision auto` still checks fp16 against fp32 on the actual network at
+  every start, and takes fp32 if it is outside the tolerance.
+- The scheduler stress tests (12 threads, 1,800 evaluations) pass with the
+  Winograd engine in both precisions.
+
 ## Phase 2 step 2.11a: Winograd engine, fp32 (2026-10-05)
 
 First working Winograd network (MSL transforms + `MPSMatrixMultiplication`,
