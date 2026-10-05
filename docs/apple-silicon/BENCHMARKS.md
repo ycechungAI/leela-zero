@@ -321,6 +321,31 @@ Engine:
 - Accuracy on a real network is untested, so `MetalNetwork` pins level 0
   (GPU only). See ADR-004 for the follow-up.
 
+## Winograd fp16 accuracy on a real network (2026-10-05)
+
+The nightly failed G2 for fp16 Winograd on the random 20×256 stand-in (policy
+0.0137 vs the 1e-2 limit). Emulating fp16 rounding one stage at a time in fp32
+showed no dominant stage (weights, V, M and activations each add 3-4e-3 on the
+random net); on the real 40×256 network M mattered most for the value. M (the
+GEMM result) is now always float: about 7% slower (15×192 B16: ~730 to ~690
+n/s; 40×256: ~171 to ~160), still ~1.4-1.5x OpenCL.
+
+Real 40×256 network (the official best network, downloaded for this check and
+deleted), Metal vs CPU, 8 symmetries x 80 positions of random-play games:
+
+| engine / precision | max policy diff | max winrate diff |
+| --- | --- | --- |
+| MPSGraph fp32 | 2.3e-6 | 3.1e-6 |
+| MPSGraph fp16 | 2.7e-3 | 3.0e-3 |
+| Winograd fp32 | 1.5e-6 | 3.4e-6 |
+| Winograd fp16 before (half M) | 2.3e-3 | **6.0e-3 (over the 5e-3 limit)** |
+| Winograd fp16 after (float M) | 2.8e-3 | 2.5e-3 |
+
+Random-weight stand-ins are a worst case whose fp16 error varies about 2x with
+the positions played, so `full_gate.sh` gives them a 2e-2 policy limit
+(`FP16_POLICY_TOL`); real networks keep N6 (1e-2 / 5e-3). The random 20×256
+fp16 Winograd row is 5.6e-3 locally after the change (6.5e-3 before).
+
 ## Phase 2 step 2.4: MetalScheduler (batched, asynchronous) (2026-10-03)
 
 Random nets, M4, fp32. Interleaved, 3 runs, medians, n/s.

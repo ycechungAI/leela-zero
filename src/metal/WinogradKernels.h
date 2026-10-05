@@ -21,7 +21,8 @@
 
 // Metal Shading Language source for the Winograd F(4x4, 3x3) network, compiled
 // at runtime by MetalWinograd.mm after it prepends
-//   #define store_t float   (or half)
+//   #define store_t float   (or half)   activations, V, U
+//   #define mstore_t float                GEMM output M (always float)
 // Layouts, per Winograd element e = 0..35 (row-major matrices):
 //   V[e]: N x C   (N = batch * 25 tiles)   input transform output
 //   U[e]: C x K   weights (Network::winograd_transform_f)
@@ -128,7 +129,7 @@ template [[host_name("in_transform_act")]] kernel void in_transform<store_t, 1>(
 
 // y = max(0, scale * (At M A - mean) [+ residual]). Y may be the residual
 // buffer itself: each output pixel is read and written by one thread only.
-kernel void out_transform(device const store_t* M [[buffer(0)]],
+kernel void out_transform(device const mstore_t* M [[buffer(0)]],
                           device store_t* Y [[buffer(1)]],
                           device const float* means [[buffer(2)]],
                           device const float* scales [[buffer(3)]],

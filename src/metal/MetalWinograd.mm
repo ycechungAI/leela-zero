@@ -147,7 +147,9 @@ WinogradNet::WinogradNet(id<MTLDevice> device, id<MTLCommandQueue> queue,
       m_blocks(blocks),
       m_store_bytes(precision == MetalPrecision::Half ? 2 : 4),
       m_store_type(precision == MetalPrecision::Half ? MPSDataTypeFloat16
-                                                     : MPSDataTypeFloat32) {
+                                                     : MPSDataTypeFloat32),
+      m_m_bytes(4),
+      m_m_type(MPSDataTypeFloat32) {
     const auto layers = 1 + 2 * blocks;
     if (weights.m_conv_weights.size() != static_cast<std::size_t>(layers)
         || weights.m_batchnorm_means.size() != static_cast<std::size_t>(layers)
@@ -158,7 +160,7 @@ WinogradNet::WinogradNet(id<MTLDevice> device, id<MTLCommandQueue> queue,
 
     @autoreleasepool {
         NSString* source = [NSString
-            stringWithFormat:@"#define store_t %s\n%s",
+            stringWithFormat:@"#define store_t %s\n#define mstore_t float\n%s",
                              precision == MetalPrecision::Single ? "float"
                                                                  : "half",
                              WINOGRAD_MSL];
@@ -188,9 +190,11 @@ WinogradNet::WinogradNet(id<MTLDevice> device, id<MTLCommandQueue> queue,
                 throw std::runtime_error(
                     "Metal: unexpected convolution weight shape");
             }
-            // Weights, V, M and the activations are stored in the chosen
-            // precision; the transforms compute in float, and the heads and
-            // the batch norm constants stay fp32.
+            // Weights, V and the activations are stored in the chosen
+            // precision; M (the GEMM result) is always float, which costs
+            // about 7% speed and halves the fp16 value error on a real net.
+            // The transforms compute in float, and the heads and the batch
+            // norm constants stay fp32.
             m_u.push_back(precision == MetalPrecision::Half
                               ? half_buffer_with(device, u)
                               : buffer_with(device, u));
@@ -225,7 +229,7 @@ WinogradScratch WinogradNet::make_scratch(const int batch) const {
         s.v = shared_buffer(m_device, static_cast<NSUInteger>(ELEMENTS) * n
                                           * std::max(PLANES, k) * m_store_bytes);
         s.m = shared_buffer(m_device, static_cast<NSUInteger>(ELEMENTS) * n * k
-                                          * m_store_bytes);
+                                          * m_m_bytes);
         const auto act_bytes =
             static_cast<NSUInteger>(batch) * k * PLANE * m_store_bytes;
         s.act_a = shared_buffer(m_device, act_bytes);
@@ -233,7 +237,7 @@ WinogradScratch WinogradNet::make_scratch(const int batch) const {
         s.v_in = matrix_view(s.v, n, PLANES, ELEMENTS, m_store_bytes,
                              m_store_type);
         s.v_res = matrix_view(s.v, n, k, ELEMENTS, m_store_bytes, m_store_type);
-        s.m_mat = matrix_view(s.m, n, k, ELEMENTS, m_store_bytes, m_store_type);
+        s.m_mat = matrix_view(s.m, n, k, ELEMENTS, m_m_bytes, m_m_type);
         s.gemm_in = make_gemm(m_device, n, PLANES, k);
         s.gemm_res = make_gemm(m_device, n, k, k);
         return s;

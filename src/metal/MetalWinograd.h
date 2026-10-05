@@ -75,6 +75,8 @@ private:
     int m_blocks;
     NSUInteger m_store_bytes; // 4 (float) or 2 (half)
     MPSDataType m_store_type;
+    NSUInteger m_m_bytes;     // M is float even for half storage
+    MPSDataType m_m_type;
     id<MTLComputePipelineState> m_in_float = nil;
     id<MTLComputePipelineState> m_in_act = nil;
     id<MTLComputePipelineState> m_out = nil;
