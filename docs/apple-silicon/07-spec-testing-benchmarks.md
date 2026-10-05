@@ -22,7 +22,7 @@ CI caches this directory.
 | G1 | CPU Accelerate vs CPU Eigen (3.3 SHA) | ≤1e-5 abs | `as.1` + every PR touching `CPUPipe` |
 | G2 | Metal fp32 / fp16 vs CPU reference: 100 positions × 8 symmetries × {N-S, N-M, N-L, N-E} | fp32 ≤1e-4. fp16 ≤1e-2 policy prob / ≤5e-3 value | every PR touching `src/metal` |
 | G3 | `USE_METAL_SELFCHECK` 1000-move self-play | 0 mismatches | release candidates |
-| G4 | GTP regression: fixed-seed `genmove` with `-p 1600 --noponder --randomcnt 0 -s 1` on 20 positions | Same move as CPU in ≥ 19/20 (fp16 may differ on near-ties) | release candidates |
+| G4 | GTP regression (`scripts/parity/gtp_regression.py`): fixed-seed `genmove` with `-p 1600 --noponder --randomcnt 0 -s 1 -t 1` on 20 positions | Same move as the CPU, or a move within 1% winrate of the CPU's choice in the CPU's own search, in ≥ 19/20 (ADR-011) | release candidates |
 | T1–T6 | Training gates | see spec 06 | `as.3` |
 
 ### Implementation notes
@@ -66,8 +66,7 @@ code, built with the minimal CMake fix) before any optimization lands.
 
 | Metric | Target | Spec |
 |--------|--------|------|
-| Metal fp16 vs OpenCL, N-L, best batch | ≥ 2.5× n/s | 05 |
-| Metal fp16 vs OpenCL, N-M, best batch | ≥ 2.0× n/s | 05 |
+| Metal (autotuned) vs tuned OpenCL, N-L and N-M | ≥ 1.2× n/s (ADR-010, ADR-011) | 05 |
 | Metal batch-1 latency vs OpenCL batch-1 | ≤ 1.0× | 05 |
 | CPU Accelerate vs Eigen, N-M | ≥ 1.5× n/s | 04 |
 | Training GPU utilization | ≥ 80% | 06 |

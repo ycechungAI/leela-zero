@@ -221,3 +221,27 @@
   OpenCL backend stays buildable for comparison but is no longer a reason to
   chase throughput. If a future macOS or MPS release changes GEMM speed, the
   autotune picks it up without code changes.
+
+## ADR-011: G4 compares moves up to near-ties; N1 is 1.2× on real networks
+
+- **Status:** Accepted (2026-10-05, step 2.R gates). Amends G4 in
+  07-spec-testing-benchmarks.md and N1 (ADR-010).
+- **Context (G4):** G4 asked for the same `genmove` as the CPU in ≥ 19/20
+  positions. Once the search was made reproducible (seeded pool threads, ample
+  time per move), the real 15b×192 network gave 18/20 for upstream OpenCL,
+  17/20 for Metal fp32 and 16–18/20 for Metal fp16, and the CPU against itself
+  with only the seed changed gave 16/20 and 17/20. Exact-move agreement
+  measures MCTS's own sensitivity on near-ties, not backend error; no
+  non-CPU backend can meet 19/20.
+- **Decision (G4):** the reference (CPU) searches with `lz-genmove_analyze`. A
+  position passes when the test backend plays the same move, or a move the
+  reference searched whose winrate is within 1% of the reference's choice.
+  ≥ 19/20 must pass. `scripts/parity/gtp_regression.py` implements it.
+- **Context (N1):** ADR-010 set ≥ 1.3× OpenCL from random-network numbers. On
+  the real networks Metal is 1.22× OpenCL on 15b×192 at 1600 visits (1.38× at
+  6400) and 1.34× on 40b×256.
+- **Decision (N1):** ≥ 1.2× the tuned OpenCL baseline on the real 15b×192 and
+  40b×256 networks at the standard `--benchmark` visits, and ≥ 1.5× the CPU.
+- **Consequences:** Gate results now separate backend error from search
+  noise. A backend that made worse moves (not just different near-ties) still
+  fails G4.

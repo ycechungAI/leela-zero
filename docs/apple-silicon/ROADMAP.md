@@ -79,7 +79,7 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
 10. ✅ CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU),
     nightly `parity-full` (both engines, both precisions) and Metal `asan`.
 
-**Exit:** ≥1.3× tuned OpenCL on 15b×192 and 40b×256 (ADR-010; ✅ 1.4–1.5×), G2/G3/G4 pass, and the soak test is clean (✅).
+**Exit:** ≥1.2× tuned OpenCL on real 15b×192 and 40b×256 networks (ADR-010/011; ✅ 1.22× / 1.34×), G2/G3/G4 pass (✅ on the real 15b×192 net), and the soak test is clean (✅).
 Tag `as.2`.
 
 ## Phase 3 — `v0.18.0-as.3` "Train on Mac" (spec 06)

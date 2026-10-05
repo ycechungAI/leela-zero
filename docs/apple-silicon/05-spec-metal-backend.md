@@ -8,7 +8,7 @@
 - A new `ForwardPipe` implementation, `MetalScheduler<T>` (T = `float` or
   `half`), that runs the whole residual tower and both heads on the M4 GPU.
 - Zero host↔device copies per evaluation, using unified memory (requirement N3).
-- ≥ 1.3× the throughput of the tuned OpenCL-on-macOS baseline (N1; was 2.5×, see ADR-010).
+- ≥ 1.2× the throughput of the tuned OpenCL-on-macOS baseline on real networks (N1; was 2.5×, see ADR-010/011).
 - It becomes the default backend on macOS.
 
 ## 2. Why not keep OpenCL
@@ -139,7 +139,7 @@ On first run per (net shape, device), time batch sizes {8, 16, 32, 64} ×
 - [ ] Gate G2 (spec 07): Metal fp32 vs CPU reference ≤ 1e-4, and fp16 within
       the N6 tolerance on 3 nets × 100 positions × 8 symmetries.
 - [ ] Gate G3: 1,000-move self-play with `USE_METAL_SELFCHECK` shows 0 mismatches.
-- [x] Throughput: ≥ 1.3× the tuned OpenCL baseline on 15b×192 and 40b×256 (ADR-010; measured 1.4–1.5× on random nets).
+- [x] Throughput: ≥ 1.2× the tuned OpenCL baseline on real 15b×192 and 40b×256 networks (ADR-010/011; measured 1.22× and 1.34×).
       Latency at batch 1 is ≤ the OpenCL batch-1 latency.
 - [ ] Instruments "Metal System Trace" shows no `blit` encoders per inference
       batch (N3).

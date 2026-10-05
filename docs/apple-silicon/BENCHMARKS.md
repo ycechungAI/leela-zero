@@ -478,12 +478,13 @@ somewhat on real nets.
 - **G3** (`USE_METAL_SELFCHECK`, 1 in 2000 evaluations checked against the
   CPU): 6 self-play games at 200 visits, 1,330 moves (~130 checks), no
   mismatch. Pass.
-- **G4** (`scripts/parity/gtp_regression.py`: 20 positions, `genmove` at 1600
-  playouts, `-t 1 -s 1`, no noise, ample time): leelaz's search was not
-  reproducible across processes (pool threads seeded their RNG from the thread
-  id, and the default one-hour time budget cut long searches short); both are
-  fixed. With a reproducible search, against the CPU backend, on positions
-  from real self-play: OpenCL 18/20, Metal fp32 17/20, Metal fp16 16/20 (the
-  spec asks ≥ 19/20). Most differences are adjacent points (n8/n9, c3/c2,
-  q1/q2, r11/s11): MCTS turns evaluation differences of ~1e-6 into different
-  visit counts on near-ties, so even the upstream OpenCL backend misses 19/20.
+- **G4** (`scripts/parity/gtp_regression.py`: 20 positions from the G3 games,
+  `genmove` at 1600 playouts, `-t 1 -s 1`, no noise, ample time): leelaz's
+  search was not reproducible across processes (pool threads seeded their RNG
+  from the thread id; the default one-hour time budget cut long searches
+  short); both are fixed. Exact same move as the CPU: OpenCL 18/20, Metal fp32
+  17/20, Metal fp16 16–18/20, and the CPU against itself with another seed
+  16/20 and 17/20, so exact agreement measures search noise on near-ties.
+  With the ADR-011 rule (same move, or within 1% winrate in the CPU's
+  search): Metal fp16 19/20 (18 same), **pass**; the reseeded CPU 19/20 and
+  20/20.
