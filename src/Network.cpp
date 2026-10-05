@@ -743,14 +743,13 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
 void Network::initialize(const int playouts, const std::string& weightsfile) {
 #ifdef USE_BLAS
 #ifdef __APPLE__
-    // Search threads provide the parallelism; keep each sgemm on its own
-    // thread, like openblas_set_num_threads(1) below.
-    if (__builtin_available(macOS 15.0, *)) {
-        BLASSetThreading(BLAS_THREADING_SINGLE_THREADED);
-    }
+    // The search threads set this for themselves (Platform::init_search_thread);
+    // this covers callers that evaluate on their own thread, such as tests.
+    const auto single = Platform::set_blas_single_threaded();
     const auto feature = Platform::cpu_feature_string();
-    myprintf("BLAS Core: Apple Accelerate%s.\n",
-             feature.empty() ? "" : (" (" + feature + ")").c_str());
+    myprintf("BLAS Core: Apple Accelerate%s, %s.\n",
+             feature.empty() ? "" : (" (" + feature + ")").c_str(),
+             single ? "single-threaded per call" : "multi-threaded per call");
 #else
 #ifdef USE_OPENBLAS
     openblas_set_num_threads(1);

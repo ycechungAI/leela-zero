@@ -471,8 +471,9 @@ static void parse_commandline(const int argc, const char* const argv[]) {
     }
     if (Platform::num_eff_cores() > 0) {
         myprintf("Using %d thread(s) (%d performance + %d efficiency cores).\n",
-                 cfg_num_threads, Platform::num_perf_cores(),
-                 Platform::num_eff_cores());
+                 cfg_num_threads,
+                 static_cast<int>(Platform::num_perf_cores()),
+                 static_cast<int>(Platform::num_eff_cores()));
     } else {
         myprintf("Using %d thread(s).\n", cfg_num_threads);
     }
@@ -617,19 +618,19 @@ void init_global_objects() {
 
     Utils::create_z_table();
 
-    // Search threads ask for performance cores (a no-op off Apple Silicon).
+    // Search threads ask for performance cores and single-threaded
+    // Accelerate (no-ops off Apple Silicon).
     auto pool_size = size_t{0};
     const auto grow_pool = [&pool_size]() {
         for (; pool_size < cfg_num_threads; pool_size++) {
-            thread_pool.add_thread(
-                []() { Platform::set_thread_qos_interactive(); });
+            thread_pool.add_thread(Platform::init_search_thread);
         }
     };
     // The pool must exist before the network: OpenCL's precision autodetect
     // (Network::benchmark_time) runs its evaluations on it.
     grow_pool();
     // The main thread also searches.
-    Platform::set_thread_qos_interactive();
+    Platform::init_search_thread();
 
     initialize_network();
 
