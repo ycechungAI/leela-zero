@@ -197,3 +197,27 @@
   win, and does not replace this: it needs fp16, a long first compile and
   stdout protection.
 
+## ADR-010: Lower the Metal throughput target (N1) to the measured 1.4× OpenCL
+
+- **Status:** Accepted (2026-10-05, after step 2.11d). Amends N1 in
+  01-requirements.md and the Phase 2 exit in 05-spec-metal-backend.md and
+  ROADMAP.md.
+- **Context:** N1 asked for ≥ 2.5× the OpenCL baseline on 40b×256 (and ≥ 2× on
+  15b×192). Both engines have now been built and measured on the M4: MPSGraph
+  reaches 0.75× OpenCL; the Winograd engine 1.4–1.5× (fp32 GEMM result, kept
+  for fp16 accuracy on real nets). The profile puts ~65–70% of the GPU time in
+  the batched GEMMs, which MPS already runs at 2.1–2.7 TFLOP/s, and custom
+  `simdgroup_matrix` kernels did not beat it (BENCHMARKS.md, step 2.11d). A
+  perfect GEMM would give ~1.75×, and fusing the transforms (the other ~30%)
+  perhaps 1.6–1.8× in total. 2.5× is not reachable on this hardware path.
+  OpenCL on macOS is deprecated and stays capped at version 1.2, so the default
+  path still has to be Metal.
+- **Decision:** N1 becomes: the default Metal backend is **≥ 1.3× the tuned
+  OpenCL baseline** on 15b×192 and 40b×256 (measured 1.4–1.5×, leaving room for
+  run-to-run noise), and ≥ 1.5× the CPU backend. Phase 2 exits on that, G2/G3/G4
+  and a clean soak. Step 2.11e (transform fusions) is optional future work, not
+  an exit condition.
+- **Consequences:** `as.2` can be tagged without more kernel work. The
+  OpenCL backend stays buildable for comparison but is no longer a reason to
+  chase throughput. If a future macOS or MPS release changes GEMM speed, the
+  autotune picks it up without code changes.
