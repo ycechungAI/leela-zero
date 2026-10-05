@@ -168,6 +168,18 @@ bugs.
   layer.
 - Private-storage weights with a blit, if the profile shows weight bandwidth.
 
+## 2b. Implementation notes (2.11a)
+
+- V and M are stored `[element][tile][channel]` (N×C and N×K row-major per
+  element), not OpenCL's `[element][channel][tile]`: the GEMM then needs no
+  transposes, and channel-fastest threads give coalesced writes. F3 above
+  describes OpenCL's layout, not this one.
+- The residual add writes in place: each output pixel is read and written by
+  one thread, so the block's output buffer is also its residual input.
+- Kernels live in `src/metal/WinogradKernels.h`, the host side in
+  `MetalWinograd.{h,mm}`. The engine is chosen with the temporary env var
+  `LZ_METAL_ENGINE=winograd` until 2.11c.
+
 ## 3. Pitfalls
 
 - [ ] U from `winograd_transform_f` is `[e][c][k]` (C×K); OpenCL's

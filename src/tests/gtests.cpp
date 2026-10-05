@@ -704,6 +704,65 @@ TEST(MetalNetworkTest, AneFlagIsIgnoredForSinglePrecision) {
     EXPECT_EQ(err.find("Neural Engine"), std::string::npos);
 }
 
+// The Winograd engine against the CPU reference, with non-trivial batch norm,
+// for several channel counts (odd ones too) and batch 1 and 4. Batch rows must
+// not leak into each other: the batch-4 result equals four batch-1 results.
+static void check_winograd(const int C, const int blocks, const int N,
+                           const unsigned seed, const MetalPrecision precision,
+                           const float tolerance) {
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(seed);
+    const auto weights = make_test_weights(C, blocks, rng);
+    const auto cases = make_cases(weights, C, N, rng);
+
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+    MetalNetwork net(*ctx, C, blocks, *weights, {1, N}, precision, false,
+                     MetalEngine::Winograd);
+
+    std::vector<float> in;
+    for (const auto& c : cases) {
+        in.insert(in.end(), c.in.begin(), c.in.end());
+    }
+    constexpr auto pol_size = Network::OUTPUTS_POLICY * plane;
+    constexpr auto val_size = Network::OUTPUTS_VALUE * plane;
+    std::vector<float> pol(N * pol_size), val(N * val_size);
+    net.forward(in.data(), N, pol.data(), val.data());
+
+    auto worst_cpu = 0.0f, worst_batch = 0.0f, scale = 0.0f;
+    for (auto i = 0; i < N; i++) {
+        std::vector<float> pol1(pol_size), val1(val_size);
+        net.forward(cases[i].in.data(), 1, pol1.data(), val1.data());
+        for (auto j = 0; j < pol_size; j++) {
+            worst_cpu = std::max(worst_cpu, std::abs(pol1[j] - cases[i].pol[j]));
+            worst_batch = std::max(worst_batch,
+                                   std::abs(pol[i * pol_size + j] - pol1[j]));
+            scale = std::max(scale, std::abs(cases[i].pol[j]));
+        }
+        for (auto j = 0; j < val_size; j++) {
+            worst_cpu = std::max(worst_cpu, std::abs(val1[j] - cases[i].val[j]));
+            worst_batch = std::max(worst_batch,
+                                   std::abs(val[i * val_size + j] - val1[j]));
+            scale = std::max(scale, std::abs(cases[i].val[j]));
+        }
+    }
+    std::cout << "Winograd C=" << C << " blocks=" << blocks << ": vs CPU "
+              << worst_cpu << ", batch vs single " << worst_batch
+              << ", output scale " << scale << std::endl;
+    EXPECT_GT(scale, 0.05f) << "outputs too small to mean anything";
+    EXPECT_LE(worst_cpu, tolerance * scale) << "Winograd vs CPU, C=" << C;
+    EXPECT_LE(worst_batch, 1e-5f * scale) << "batch vs single, C=" << C;
+}
+
+TEST(MetalWinogradTest, MatchesCpuFp32) {
+    SKIP_WITHOUT_METAL();
+    check_winograd(8, 1, 4, 11, MetalPrecision::Single, 1e-4f);
+    check_winograd(32, 3, 4, 12, MetalPrecision::Single, 1e-4f);
+    check_winograd(17, 2, 3, 13, MetalPrecision::Single, 1e-4f); // odd channels
+    check_winograd(64, 2, 8, 14, MetalPrecision::Single, 1e-4f);
+}
+
 // Many search threads, each input distinct: any mix-up between batch rows,
 // slots or waiting threads shows up as a wrong answer.
 static void run_concurrency_test(const MetalPrecision precision,

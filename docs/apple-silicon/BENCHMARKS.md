@@ -133,6 +133,32 @@ Found while running this: OpenCL builds hung at startup since step 2.7 (the
 thread pool was created after the network, but OpenCL's precision autodetect
 runs on it). Fixed in `d0ebb96`, and CI now starts the OpenCL binary.
 
+## Phase 2 step 2.11a: Winograd engine, fp32 (2026-10-05)
+
+First working Winograd network (MSL transforms + `MPSMatrixMultiplication`,
+fp32 storage and math). Random nets, M4, `--benchmark`, 3 interleaved rounds,
+medians, n/s. fp32 only; fp16 and the custom GEMM are later sub-steps. OpenCL
+tuned (`--tune-only`) and run at batch 16 / 32 threads.
+
+| Network | OpenCL (B16, 32 thr) | MPSGraph fp32 (B8) | Winograd fp32 (B8) | Winograd fp32 (B16) | Winograd B16 ÷ OpenCL | ÷ MPSGraph fp32 |
+|---------|---:|---:|---:|---:|---:|---:|
+| random 15b×192 | 363 | 248 | 377 | **411** | **1.13×** | 1.66× |
+| random 40b×256 | 80 | 55 | 93 | **97** | **1.21×** | 1.76× |
+
+- Already past the plan's minimum (at least OpenCL) with fp32 and Apple's
+  stock matrix multiply: no hand-written GEMM, no fusion, one compute encoder
+  per kernel. The spec target (2–2.5× OpenCL) needs fp16 (2.11b) and probably
+  the custom GEMM (2.11d).
+- The day's absolute numbers are lower than on 2026-10-04 for every backend
+  (machine state), so compare within the table.
+- Correctness: the unit test matches the CPU to 5–7e-7 for C = 8, 17, 32 and
+  64 (batch 4 equals batch 1 exactly); dropping the BN mean or the tile
+  border makes it fail (diffs of 0.47 and 0.88). Gate G2 fp32 on 6×64, 15×192
+  and 20×256: worst prior difference 8.3e-6 (limit 1e-4).
+- Layout note: V and M are `[element][tile][channel]` (N×C and N×K per
+  element), so the multiply needs no transposes; this differs from OpenCL's
+  `[element][channel][tile]` in the plan's F3.
+
 ## Phase 2 step 2.8: zero-staging input (measured, not implemented) (2026-10-04)
 
 Question: would letting `Network` gather the input planes straight into the

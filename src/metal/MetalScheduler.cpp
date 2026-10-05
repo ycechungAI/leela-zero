@@ -64,9 +64,15 @@ void MetalScheduler::push_weights(
     // those are the only two graphs needed.
     const auto blocks =
         static_cast<int>((weights->m_conv_weights.size() - 1) / 2);
+    // TEMP until step 2.11c adds --metal-kernels and autotune: choose the
+    // Winograd engine with LZ_METAL_ENGINE=winograd (used by the parity gate).
+    const auto* const engine_env = std::getenv("LZ_METAL_ENGINE");
+    const auto engine = engine_env && std::string(engine_env) == "winograd"
+                            ? MetalEngine::Winograd
+                            : MetalEngine::Graph;
     m_network = std::make_unique<MetalNetwork>(
         *m_context, static_cast<int>(outputs), blocks, *weights,
-        std::vector<int>{1, m_max_batch}, m_precision, m_ane);
+        std::vector<int>{1, m_max_batch}, m_precision, m_ane, engine);
     for (auto i = 0; i < m_workers; i++) {
         m_threads.emplace_back(&MetalScheduler::worker, this);
     }
