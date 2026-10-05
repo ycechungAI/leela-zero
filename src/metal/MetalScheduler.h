@@ -46,7 +46,8 @@ public:
     static constexpr int DEFAULT_WORKERS = 2;
 
     explicit MetalScheduler(int max_batch, int workers = DEFAULT_WORKERS,
-                            MetalPrecision precision = MetalPrecision::Single);
+                            MetalPrecision precision = MetalPrecision::Single,
+                            bool ane = false);
     ~MetalScheduler() override;
 
     // Throws std::runtime_error if Metal is unavailable.
@@ -75,6 +76,7 @@ private:
     const int m_max_batch;
     const int m_workers;
     const MetalPrecision m_precision;
+    const bool m_ane; // fp16 only
     std::unique_ptr<MetalContext> m_context;
     std::unique_ptr<MetalNetwork> m_network;
     BatchQueue m_queue;

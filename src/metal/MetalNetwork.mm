@@ -22,8 +22,13 @@
 
 #include "MetalNetwork.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -34,6 +39,7 @@
 
 #include "MetalContextImpl.h"
 #include "Network.h"
+#include "Utils.h"
 
 namespace {
 
@@ -100,6 +106,57 @@ MPSGraphConvolution2DOpDescriptor* conv_descriptor(const int pad) {
                   weightsLayout:MPSGraphTensorNamedDataLayoutOIHW];
 }
 
+// While alive, file descriptor 1 points at /dev/null. MPSGraph's Neural Engine
+// compiler prints "error: Incompatible element type for ANE" lines to stdout,
+// which would corrupt the GTP stream. Only used at startup, before any other
+// thread writes to stdout. stdout is flushed on both sides, so what the
+// compiler buffered goes to /dev/null and what GTP buffered is not lost.
+class StdoutSilencer {
+public:
+    StdoutSilencer() {
+        std::fflush(stdout);
+        m_saved = dup(STDOUT_FILENO);
+        const auto null = open("/dev/null", O_WRONLY);
+        if (m_saved >= 0 && null >= 0) {
+            dup2(null, STDOUT_FILENO);
+        } else if (m_saved >= 0) {
+            close(m_saved);
+            m_saved = -1;
+        }
+        if (null >= 0) {
+            close(null);
+        }
+    }
+    ~StdoutSilencer() {
+        if (m_saved >= 0) {
+            std::fflush(stdout);
+            dup2(m_saved, STDOUT_FILENO);
+            close(m_saved);
+        }
+    }
+    StdoutSilencer(const StdoutSilencer&) = delete;
+    StdoutSilencer& operator=(const StdoutSilencer&) = delete;
+
+private:
+    int m_saved = -1;
+};
+
+// Set by an atexit handler once the Neural Engine has been used. MPSGraph's
+// ANE support creates static objects (among them a mutex) on first use, and
+// exit() destroys them before an engine-lifetime static such as the Network,
+// so releasing an ANE executable during exit() locks a destroyed mutex and
+// aborts. The handler is registered after those statics exist, so it runs
+// before they are destroyed; from then on executables are leaked, and the OS
+// reclaims them with the process.
+std::atomic<bool> g_exiting{false};
+
+void register_exit_handler() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::atexit([] { g_exiting = true; });
+    });
+}
+
 struct Compiled {
     MPSGraphExecutable* exe = nil;
     // Position of the policy result in the executable's result order.
@@ -108,7 +165,8 @@ struct Compiled {
 
 Compiled compile(id<MTLDevice> device, const int C, const int blocks,
                  const ForwardPipe::ForwardPipeWeights& weights,
-                 const int batch, const MetalPrecision precision) {
+                 const int batch, const MetalPrecision precision,
+                 const bool ane) {
     constexpr auto B = BOARD_SIZE;
     const auto half = precision == MetalPrecision::Half;
     const auto tower_type = half ? MPSDataTypeFloat16 : MPSDataTypeFloat32;
@@ -182,14 +240,15 @@ Compiled compile(id<MTLDevice> device, const int C, const int blocks,
                                          dataType:MPSDataTypeFloat32];
     MPSGraphDevice* gdev = [MPSGraphDevice deviceWithMTLDevice:device];
     Compiled c;
-    // Level 0: GPU only. The default level 1 adds a placement pass that may
-    // run an fp16 tower on the Neural Engine. That is about 2x faster on a
-    // random 15b x 192 net, but the first run compiles for ~5 minutes and
-    // MPSGraph prints "error:" lines to stdout, which would corrupt GTP.
-    // See BENCHMARKS.md (step 2.5) and ADR-004.
+    // Level 0: GPU only. Level 1 adds a placement pass that runs an fp16
+    // tower on the Neural Engine: about 2x faster on a random 15b x 192 net,
+    // but the first run of each graph compiles for minutes (see the
+    // constructor, which does that up front) and the compiler writes to
+    // stdout. Only requested with ane (--ane). See BENCHMARKS.md and ADR-004.
     MPSGraphCompilationDescriptor* cd =
         [[MPSGraphCompilationDescriptor alloc] init];
-    cd.optimizationLevel = MPSGraphOptimizationLevel0;
+    cd.optimizationLevel =
+        ane ? MPSGraphOptimizationLevel1 : MPSGraphOptimizationLevel0;
     c.exe = [g compileWithDevice:gdev
                            feeds:@{input : in_type}
                    targetTensors:@[ pol, val ]
@@ -251,8 +310,10 @@ MetalNetwork::MetalNetwork(const MetalContext& ctx, const int channels,
                            const int residual_blocks,
                            const ForwardPipe::ForwardPipeWeights& weights,
                            const std::vector<int>& batch_sizes,
-                           const MetalPrecision precision)
+                           const MetalPrecision precision, const bool ane)
     : m_impl(std::make_unique<Impl>()) {
+    // The Neural Engine runs the fp16 tower only.
+    const auto use_ane = ane && precision == MetalPrecision::Half;
     @autoreleasepool {
         m_impl->device = ctx.impl().device;
         m_impl->queue = ctx.impl().queue;
@@ -264,16 +325,56 @@ MetalNetwork::MetalNetwork(const MetalContext& ctx, const int channels,
             if (batch < 1) {
                 throw std::runtime_error("Metal: invalid batch size");
             }
-            if (m_impl->graphs.count(batch) == 0) {
-                m_impl->graphs.emplace(
-                    batch, compile(m_impl->device, channels, residual_blocks,
-                                   weights, batch, precision));
+        }
+        if (use_ane) {
+            Utils::myprintf_error(
+                "Compiling the network for the Neural Engine; this takes "
+                "several minutes the first time for each network and batch "
+                "size (later starts reuse the system's cache).\n");
+        }
+        const auto start = std::chrono::steady_clock::now();
+        {
+            std::unique_ptr<StdoutSilencer> silence;
+            if (use_ane) {
+                silence = std::make_unique<StdoutSilencer>();
             }
+            for (const auto batch : batch_sizes) {
+                if (m_impl->graphs.count(batch) == 0) {
+                    m_impl->graphs.emplace(
+                        batch,
+                        compile(m_impl->device, channels, residual_blocks,
+                                weights, batch, precision, use_ane));
+                }
+            }
+            if (use_ane) {
+                // MPSGraph compiles for the Neural Engine lazily, inside the
+                // first run of each graph. Do it now, so that it never
+                // happens in the middle of a search.
+                for (const auto& entry : m_impl->graphs) {
+                    const auto slot = make_slot(entry.first);
+                    std::memset(slot->input(), 0,
+                                sizeof(float) * entry.first * PLANES * PLANE);
+                    run(*slot);
+                }
+            }
+        }
+        if (use_ane) {
+            Utils::myprintf_error(
+                "Neural Engine compile done in %.0f s.\n",
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - start)
+                    .count());
+            register_exit_handler();
         }
     }
 }
 
-MetalNetwork::~MetalNetwork() = default;
+MetalNetwork::~MetalNetwork() {
+    if (g_exiting) {
+        // See g_exiting: keep the executables alive past exit().
+        new std::map<int, Compiled>(std::move(m_impl->graphs));
+    }
+}
 
 std::unique_ptr<MetalSlot> MetalNetwork::make_slot(const int batch) const {
     if (m_impl->graphs.count(batch) == 0) {

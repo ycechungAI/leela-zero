@@ -236,6 +236,11 @@ static void parse_commandline(const int argc, const char* const argv[]) {
                       "Floating-point precision (single/half/auto).\n"
                       "Default is to auto which automatically determines which one to use.")
 #endif
+#ifdef USE_METAL
+        ("ane", "Metal: run the fp16 network on the Neural Engine (experimental).\n"
+                "Needs fp16 (--precision half, or auto when fp16 is chosen). The first run\n"
+                "of a network compiles for several minutes; off by default.")
+#endif
         ;
 #endif
     po::options_description selfplay_desc("Self-play options");
@@ -412,6 +417,19 @@ static void parse_commandline(const int argc, const char* const argv[]) {
 #endif
 #endif
     select_backend(vm);
+
+#ifdef USE_METAL
+    if (vm.count("ane")) {
+        if (cfg_backend != backend_t::METAL) {
+            fprintf(stderr, "Ignoring --ane: it needs the Metal backend.\n");
+        } else if (cfg_precision == precision_t::SINGLE) {
+            fprintf(stderr, "Ignoring --ane: the Neural Engine runs fp16 only, "
+                            "but --precision single was given.\n");
+        } else {
+            cfg_ane = true;
+        }
+    }
+#endif
 
     if (cfg_backend == backend_t::CPU) {
         calculate_thread_count_cpu(vm);

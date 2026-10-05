@@ -622,6 +622,88 @@ TEST(MetalNetworkTest, HalfPrecisionIsCloseToCpu) {
     EXPECT_GT(worst, 0.0f);
 }
 
+// The Neural Engine compiles lazily; the constructor must do it all up front,
+// keep stdout clean, and give results within fp16 tolerance. MPSGraph places
+// nothing on the ANE for small towers (32x3, 64x3 and 128x3 gave results
+// identical to fp16 on the GPU on an M4), so this uses 128x6, which it does
+// place; the test checks that, so it cannot pass on the GPU by accident.
+// The first compile on a machine can be slow, so it only runs with
+// LZ_TEST_ANE=1.
+TEST(MetalNetworkTest, NeuralEngineIsCloseToCpuAndKeepsStdoutClean) {
+    SKIP_WITHOUT_METAL();
+    if (std::getenv("LZ_TEST_ANE") == nullptr) {
+        GTEST_SKIP() << "set LZ_TEST_ANE=1 (compiles for the Neural Engine)";
+    }
+    constexpr auto C = 128;
+    constexpr auto blocks = 6;
+    constexpr auto N = 4;
+    constexpr auto plane = BOARD_SIZE * BOARD_SIZE;
+    std::mt19937 rng(4321);
+    const auto weights = make_test_weights(C, blocks, rng);
+    const auto cases = make_cases(weights, C, N, rng);
+
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+    MetalNetwork gpu(*ctx, C, blocks, *weights, {N}, MetalPrecision::Half);
+
+    testing::internal::CaptureStdout();
+    std::unique_ptr<MetalNetwork> ane;
+    ASSERT_NO_THROW(ane = std::make_unique<MetalNetwork>(
+                        *ctx, C, blocks, *weights, std::vector<int>{1, N},
+                        MetalPrecision::Half, true));
+    std::printf("after-compile marker\n");
+    const auto out = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(out, "after-compile marker\n") << "nothing else on stdout";
+
+    std::vector<float> in;
+    for (const auto& c : cases) {
+        in.insert(in.end(), c.in.begin(), c.in.end());
+    }
+    std::vector<float> pol(N * Network::OUTPUTS_POLICY * plane);
+    std::vector<float> val(N * Network::OUTPUTS_VALUE * plane);
+    ane->forward(in.data(), N, pol.data(), val.data());
+    std::vector<float> gpu_pol(pol.size()), gpu_val(val.size());
+    gpu.forward(in.data(), N, gpu_pol.data(), gpu_val.data());
+    const auto vs_gpu = std::max(max_diff(pol, gpu_pol), max_diff(val, gpu_val));
+    std::cout << "ANE vs GPU fp16 max diff " << vs_gpu << std::endl;
+    EXPECT_GT(vs_gpu, 0.0f) << "identical to the GPU: not placed on the ANE";
+    auto worst = 0.0f, scale = 0.0f;
+    for (auto i = 0; i < N; i++) {
+        for (auto j = 0; j < Network::OUTPUTS_POLICY * plane; j++) {
+            worst = std::max(worst, std::abs(pol[i * Network::OUTPUTS_POLICY * plane + j]
+                                             - cases[i].pol[j]));
+            scale = std::max(scale, std::abs(cases[i].pol[j]));
+        }
+        for (auto j = 0; j < Network::OUTPUTS_VALUE * plane; j++) {
+            worst = std::max(worst, std::abs(val[i * Network::OUTPUTS_VALUE * plane + j]
+                                             - cases[i].val[j]));
+            scale = std::max(scale, std::abs(cases[i].val[j]));
+        }
+    }
+    std::cout << "ANE vs CPU max diff " << worst << " (output scale " << scale
+              << ")" << std::endl;
+    EXPECT_GT(scale, 0.05f);
+    EXPECT_LE(worst, 0.02f * scale);
+}
+
+// ane is ignored for fp32.
+TEST(MetalNetworkTest, AneFlagIsIgnoredForSinglePrecision) {
+    SKIP_WITHOUT_METAL();
+    constexpr auto C = 8;
+    constexpr auto blocks = 1;
+    std::mt19937 rng(11);
+    const auto weights = make_test_weights(C, blocks, rng);
+    std::string error;
+    const auto ctx = MetalContext::create(error);
+    ASSERT_NE(ctx, nullptr) << error;
+    testing::internal::CaptureStderr();
+    MetalNetwork single(*ctx, C, blocks, *weights, {1}, MetalPrecision::Single,
+                        true);
+    const auto err = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(err.find("Neural Engine"), std::string::npos);
+}
+
 // Many search threads, each input distinct: any mix-up between batch rows,
 // slots or waiting threads shows up as a wrong answer.
 static void run_concurrency_test(const MetalPrecision precision,
@@ -810,6 +892,16 @@ TEST(MetalTuningTest, CacheRoundTripAndKeyIsolation) {
     EXPECT_EQ(out.size(), 1u);
     EXPECT_FALSE(cache.load(other_device, out)) << "device is part of the key";
 
+    // The Neural Engine is a separate key.
+    const MetalTuning::Key a_ane{"Apple M4", 192, 15, true};
+    EXPECT_FALSE(cache.load(a_ane, out)) << "ane is part of the key";
+    ASSERT_TRUE(cache.store(a_ane, {H(8, 760.0)}));
+    ASSERT_TRUE(cache.load(a_ane, out));
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].precision, MetalPrecision::Half);
+    ASSERT_TRUE(cache.load(a, out));
+    EXPECT_EQ(out.size(), 2u) << "the non-ANE rows are untouched";
+
     // Storing a key again replaces its rows and keeps the others.
     ASSERT_TRUE(cache.store(a, {S(32, 400.0)}));
     ASSERT_TRUE(cache.load(a, out));
@@ -842,6 +934,32 @@ TEST(MetalTuningTest, CacheToleratesGarbage) {
     std::filesystem::remove_all(std::filesystem::path(path).parent_path());
 }
 
+// Rows written before the Neural Engine existed (six fields) are GPU rows.
+TEST(MetalTuningTest, LegacyRowsAreNotAneRows) {
+    const auto path = temp_file("metal_tuning");
+    {
+        std::ofstream f(path);
+        f << "Apple M4\t192\t15\thalf\t8\t400.0\n"
+             "Apple M4\t192\t15\thalf\t8\t760.0\tane\n"
+             "Apple M4\t192\t15\thalf\t16\t760.0\tgpu\n"; // bad flag
+    }
+    const MetalTuning::Cache cache(path);
+    std::vector<Measurement> out;
+    ASSERT_TRUE(cache.load({"Apple M4", 192, 15, false}, out));
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_NEAR(out[0].evals_per_sec, 400.0, 0.01);
+    ASSERT_TRUE(cache.load({"Apple M4", 192, 15, true}, out));
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_NEAR(out[0].evals_per_sec, 760.0, 0.01);
+    std::filesystem::remove_all(std::filesystem::path(path).parent_path());
+}
+
+TEST(MetalTuningTest, NeuralEngineTriesFewerBatchSizes) {
+    EXPECT_EQ(MetalTuning::candidate_batches(false),
+              (std::vector<int>{8, 16, 32, 64}));
+    EXPECT_EQ(MetalTuning::candidate_batches(true), (std::vector<int>{8, 16}));
+}
+
 // The GPU part: every candidate batch size, both precisions, plausible numbers.
 TEST(MetalTuningTest, MeasuresEveryCandidateOnTheGpu) {
     SKIP_WITHOUT_METAL();
@@ -855,7 +973,7 @@ TEST(MetalTuningTest, MeasuresEveryCandidateOnTheGpu) {
 
     auto reports = 0;
     const auto m = MetalTuning::measure(
-        *ctx, C, blocks, *weights, 2, 0.01,
+        *ctx, C, blocks, *weights, 2, 0.01, false,
         [&reports](const std::vector<Measurement>&) { reports++; });
     EXPECT_EQ(reports, 4) << "one progress report per batch size";
     EXPECT_EQ(m.size(), 8u);

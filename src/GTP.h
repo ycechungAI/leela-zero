@@ -107,6 +107,8 @@ extern bool cfg_tune_only;
 // True when neither --threads nor --batchsize was given: Metal then picks the
 // batch size (and with it the thread count) by autotune.
 extern bool cfg_autotune_batch;
+// --ane: run the fp16 tower on the Neural Engine. Off by default.
+extern bool cfg_ane;
 #endif
 #if defined(USE_HALF) || defined(USE_METAL)
 enum class precision_t {

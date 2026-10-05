@@ -218,7 +218,13 @@ and the input/output buffers stay fp32. n/s from `--benchmark`, 3 runs.
   every search evaluation was compared with the CPU, 0 mismatches in both
   precisions (throughput drops to ~2,300 n/s while it runs).
 
-### Neural Engine placement (experiment, not enabled)
+### Neural Engine placement (opt-in: `--ane`, 2026-10-04)
+
+With `--ane`: random 15b×192, `--benchmark -v 1600`: **803 n/s** (autotune table,
+fp16 ANE: batch 8 771, batch 16 827; fp32: 296 / 287). First-run compile: batch 8
+330 s, batch 16 681 s, batch 1 1132 s; cached runs take ~0 s. Stdout stayed clean.
+
+### Neural Engine placement (experiment, original notes)
 
 MPSGraph's default optimization level may run the fp16 tower on the Neural
 Engine:
