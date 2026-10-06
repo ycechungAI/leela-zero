@@ -33,6 +33,25 @@ def xavier(shape, tf_shape):
     return stddev * mx.random.truncated_normal(-2.0, 2.0, shape)
 
 
+@mx.checkpoint
+def _bn_train(x, beta):
+    """Batch statistics in fp32, output in x's dtype. Checkpointed: the
+    backward pass recomputes the fp32 intermediates from x instead of keeping
+    an fp32 copy of every activation (about half the training memory)."""
+    xf = x.astype(mx.float32)
+    axes = tuple(range(x.ndim - 1))
+    mean = mx.mean(xf, axis=axes)
+    var = mx.var(xf, axis=axes)
+    unbiased = mx.var(xf, axis=axes, ddof=1)
+    y = (xf - mean) * mx.rsqrt(var + BN_EPSILON) + beta
+    return y.astype(x.dtype), mean, unbiased
+
+
+def _bn_eval(x, beta, mean, var):
+    xf = x.astype(mx.float32)
+    return ((xf - mean) * mx.rsqrt(var + BN_EPSILON) + beta).astype(x.dtype)
+
+
 class BatchNorm(nn.Module):
     """tf.layers.batch_normalization(center=True, scale=False, eps=1e-5).
 
@@ -48,20 +67,14 @@ class BatchNorm(nn.Module):
         self.freeze(keys=["running_mean", "running_var"], recurse=False)
 
     def __call__(self, x):
-        xf = x.astype(mx.float32)
         if self.training:
-            axes = tuple(range(x.ndim - 1))
-            mean = mx.mean(xf, axis=axes)
-            var = mx.var(xf, axis=axes)
-            unbiased = mx.var(xf, axis=axes, ddof=1)
+            y, mean, unbiased = _bn_train(x, self.beta)
             self.running_mean = ((1 - BN_MOMENTUM) * self.running_mean
                                  + BN_MOMENTUM * mean)
             self.running_var = ((1 - BN_MOMENTUM) * self.running_var
                                 + BN_MOMENTUM * unbiased)
-        else:
-            mean, var = self.running_mean, self.running_var
-        y = (xf - mean) * mx.rsqrt(var + BN_EPSILON) + self.beta
-        return y.astype(x.dtype)
+            return y
+        return _bn_eval(x, self.beta, self.running_mean, self.running_var)
 
 
 class Conv(nn.Module):

@@ -362,6 +362,28 @@ elements, half × half → float, GPU timestamps, median of 20):
 
 No custom kernel beat MPS, so 2.11d stops here (ADR-009).
 
+## Step 3.5: MLX training step, speed and memory (2026-10-06)
+
+`lz.train.Trainer` (compiled grad step, bf16 compute, fp32 master weights),
+random batches, M4 (16 GB). Peak memory is `mx.get_peak_memory()`.
+
+| net | batch | dtype | step | positions/s | peak |
+| --- | ---: | --- | ---: | ---: | ---: |
+| 6b×64 | 256 | bf16 | 0.26–0.30 s | 850–980 | 1.6–1.8 GiB |
+| 6b×64 | 256 | fp32 | 0.31 s | 830 | 2.8 GiB |
+| 10b×128 | 256 | bf16 | 1.15 s | 223 | 3.9 GiB (before the BN change) |
+| 20b×256 | 64 | bf16 | 1.7 s | 36–39 | 3.3 GiB |
+| 20b×256 | 256 | bf16 | 7.9 s | 33 | **10.55 GiB** (N5 budget 11) |
+
+Compiled vs eager: 0.26 vs 0.33 s/step (6b×64). 20b×256 is compute-bound at
+about 2 TFLOP/s effective (17 GFLOP/position forward, ~3× with backward), so
+roughly 35 positions/s on this GPU: a 200k-step run at batch 128 would take
+about 8 days. The first measurement was 12.9 GiB at batch 256 because batch
+norm upcast every activation to fp32 and the backward pass kept those copies;
+checkpointing the batch norm body (recompute from the bf16 input) brought it to
+10.55 GiB at the same speed. The memory guard's estimate is calibrated on the
+two 20b×256 points (3.27 and 10.59 GiB projected).
+
 ## Phase 2 soak (2026-10-05)
 
 `scripts/macos/soak.py --minutes 120 -t 16`, random 15b×192 network, Metal
