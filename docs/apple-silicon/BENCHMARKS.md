@@ -408,6 +408,29 @@ Networks from zero.sjeng.org, verified by SHA-256 and deleted afterwards:
   recipe: test policy loss ≤ 4.85 and test accuracy ≥ 40% at 20k steps.**
   Both exported nets (plain and SWA) load in leelaz.
 
+## T6 first attempt: fine-tuning overfits on 257 games (2026-10-06)
+
+Public 10b×128 `39d46507…` (downloaded, deleted afterwards), fine-tuned with
+lz-train on 257 of its own self-play games (44.8k positions, 200 visits),
+lr 0.0005, batch 128, 1000 steps, bf16. Held-out policy stayed put (loss
+3.90, accuracy 65.6%); test value mse/4 0.418 → 0.392.
+
+Match (`validation`, 200 visits, `-t 8 --batchsize 8`, both engines with the
+same options): **fine-tuned 7 – 35 original after 42 games (17%)**; stopped,
+the 45% bar cannot be reached. (A first start gave the original engine
+`validation`'s default 3200 visits because `-o` applies per engine; those
+games were discarded.)
+
+Diagnosis on 2560 positions: the fine-tuned value head differs from the
+original by 0.70 on average (up to 2.0) and fits these games' results much
+more closely (correlation with the game result 0.43 → 0.75, a negative bias
+copied from this data), i.e. it memorised 257 games. The label convention is
+right (the original net already correlates +0.43). Recomputing only the batch
+norm running statistics on this data, without any weight update, moves the
+value by 0.12 on average: the 257 games are not representative of the data
+the public net was trained on. tfprocess notes that small datasets need a
+smaller value-loss weight.
+
 ## Step 3.5: MLX training step, speed and memory (2026-10-06)
 
 `lz.train.Trainer` (compiled grad step, bf16 compute, fp32 master weights),
