@@ -26,6 +26,7 @@ from mlx.utils import tree_flatten, tree_map, tree_unflatten
 from . import data
 from .convert import model_to_tensors, shape_from_tensors, tensors_to_model
 from .model import LeelaZeroNet, loss_fn
+from .swa import SWA
 from .weights import read_weights, write_weights
 
 DTYPES = {"fp32": mx.float32, "bf16": mx.bfloat16, "fp16": mx.float16}
@@ -77,12 +78,14 @@ def memory_guard(blocks, filters, batch, dtype, force):
 
 
 class Trainer:
-    def __init__(self, model, dtype, schedule, macrobatch=1):
+    def __init__(self, model, dtype, schedule, macrobatch=1, swa_c=1,
+                 swa_max_n=16):
         self.model = model
         self.dtype = dtype
         self.macrobatch = macrobatch
         self.schedule = schedule
         self.step = 0
+        self.swa = SWA(swa_c, swa_max_n)
         self.model.compute_dtype = DTYPES[dtype]
         self.loss_scale = FP16_LOSS_SCALE if dtype == "fp16" else 1.0
         self.optimizer = optim.SGD(learning_rate=lr_at(schedule, 0),
@@ -142,7 +145,10 @@ class Trainer:
         arrays = {"model/" + k: v for k, v in tree_flatten(self.model.parameters())}
         arrays.update({"opt/" + k: v for k, v in
                        tree_flatten(self.optimizer.state)})
-        mx.save_safetensors(path, arrays, {"step": str(self.step)})
+        arrays.update(self.swa.state_arrays())
+        mx.save_safetensors(path, arrays, {
+            "step": str(self.step), "swa_n": str(self.swa.n),
+            "swa_skip": str(self.swa.skip)})
 
     def load_checkpoint(self, path):
         arrays, meta = mx.load(path, return_metadata=True)
@@ -151,6 +157,7 @@ class Trainer:
         opt = [(k[4:], v) for k, v in arrays.items() if k.startswith("opt/")]
         self.optimizer.state = tree_unflatten(opt)
         self.step = int(meta["step"])
+        self.swa.load_state(arrays, meta)
         mx.eval(self.model.parameters(), self.optimizer.state)
 
     def export(self, path):
@@ -208,6 +215,13 @@ def parse_args(argv):
     p.add_argument("--sample", type=int, default=16,
                    help="use 1 in N records of each chunk")
     p.add_argument("--shuffle-gb", type=float, default=None)
+    p.add_argument("--no-swa", action="store_true",
+                   help="do not write stochastic-weight-averaged nets")
+    p.add_argument("--swa-c", type=int, default=1,
+                   help="sample every c-th checkpoint")
+    p.add_argument("--swa-max-n", type=int, default=16)
+    p.add_argument("--swa-batches", type=int, default=200,
+                   help="batches used to refine batch norm in an SWA net")
     p.add_argument("--force", action="store_true",
                    help="ignore the memory guard")
     return p.parse_args(argv)
@@ -235,7 +249,7 @@ def main(argv=None):
     model = build_model(args)
     memory_guard(model.blocks, model.filters, args.batch, args.dtype, args.force)
     trainer = Trainer(model, args.dtype, parse_schedule(args.lr_schedule),
-                      args.macrobatch)
+                      args.macrobatch, args.swa_c, args.swa_max_n)
     if restore:
         trainer.load_checkpoint(restore)
         print("Restored step", trainer.step)
@@ -287,6 +301,14 @@ def main(argv=None):
                         args.checkpoint_dir, "step-%d.safetensors" % step))
                     trainer.export(os.path.join(
                         args.export_dir, "lz-%d.txt.gz" % step))
+                    if not args.no_swa:
+                        n = trainer.swa.update(trainer.model)
+                        if n:
+                            trainer.swa.export(
+                                trainer.model, train_data, os.path.join(
+                                    args.export_dir,
+                                    "lz-swa-%d-%d.txt.gz" % (n, step)),
+                                args.swa_batches)
         finally:
             if test_data:
                 test_data.close()

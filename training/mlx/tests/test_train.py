@@ -152,6 +152,9 @@ def test_cli_trains_checkpoints_and_exports_a_net_leelaz_can_load(tmp_path, caps
     exported = out / "lz-30.txt.gz"
     ckpt = tmp_path / "ck" / "step-30.safetensors"
     assert exported.exists() and ckpt.exists()
+    swa_net = out / "lz-swa-1-30.txt.gz"
+    assert swa_net.exists()
+    tensors_to_model(read_weights(swa_net)[1])         # loads, right shape
     version, tensors = read_weights(exported)
     assert version == 1
     model = tensors_to_model(tensors)
