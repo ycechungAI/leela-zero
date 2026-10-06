@@ -362,6 +362,52 @@ elements, half × half → float, GPU timestamps, median of 20):
 
 No custom kernel beat MPS, so 2.11d stops here (ADR-009).
 
+## Phase 3 gates T2–T5 (2026-10-06)
+
+Networks from zero.sjeng.org, verified by SHA-256 and deleted afterwards:
+15b×192 `d351f06e…` (T2/T3) and 6b×128 `b3b00c6d…` (self-play data for T4).
+
+- **T3** (MLX fp32 eval vs `leelaz --backend cpu`, 30 positions from real
+  self-play): winrate 8.9e-7, priors 2.2e-6 (tol 1e-4). **Pass.**
+- **T2** (import → export → leelaz CPU, 100 positions × 8 symmetries): priors
+  3.5e-6, winrate 2.0e-6 against the spec's 1e-6. 623 of 10.4 M values (all
+  in the BN "bias" lines, β·√(var+ε)) come back one float32 step off: when
+  √(var+ε) > 1 no float32 β reproduces every file bias exactly, so 1e-6 is not
+  reachable with a β parameterisation. **Open: needs a tolerance decision.**
+- **T5** (lz-train on real chunks; GPU utilisation from `ioreg`, no sudo):
+
+  | config | positions/s | GPU | input stall | peak MLX |
+  | --- | ---: | ---: | ---: | ---: |
+  | 20b×256, batch 64, bf16 | 33.6 | 99% | — | 3.1 GiB |
+  | 20b×256, batch 128, bf16 | 33.7 | 100% | — | 5.3 GiB |
+  | 20b×256, batch 256, bf16 (CLI) | 4.4 | 71% | 0.1% | 9.15 GiB |
+  | 6b×64, batch 256, bf16 (CLI) | 760 | 98% | 0.1% (10.6% first window) | 1.55 GiB |
+
+  Batch 256 at 20b×256 fits the 11 GB budget (N5) but, with everyday apps
+  open on a 16 GB machine, the system swaps (8 GB of swap) and the step is 8×
+  slower; batch 128 × macrobatch 2 gives the same effective batch at full
+  speed. lz-train now warns when a config needs over half the memory.
+  **Pass** (GPU ≥ 80%, stall < 5%, peak ≤ 11 GB), at batch 128 for 20b×256.
+- **T4** (learning sanity; ADR-012: no TF reference, thresholds from this
+  first run): 6b×64, batch 128, 20k steps, lr 0.05 → 0.005 at 12k, bf16,
+  sample 1, on 243 self-play games (42k positions; 6b×128 net, 100–200 visits
+  with noise, so the targets are flat: mean entropy 3.9 nats, top move 16%).
+  10% of chunks held out.
+
+  | step | test policy loss | test accuracy | test mse/4 |
+  | ---: | ---: | ---: | ---: |
+  | 2000 | 5.60 | 4.0% | 0.40 |
+  | 6000 | 4.99 | 31.3% | 0.43 |
+  | 12000 | 4.88 | 37.3% | 0.46 |
+  | 16000 | 4.80 | 41.5% | 0.47 |
+  | 20000 | **4.80** | **42.2%** | 0.46 |
+
+  Train at 20k: policy 4.76, accuracy 46.7%. 773 positions/s, peak 1.4 GiB.
+  The value head memorises the 219 training games (train mse/4 0.005, test
+  0.46), so value is not gated at this data size. **Thresholds for T4 on this
+  recipe: test policy loss ≤ 4.85 and test accuracy ≥ 40% at 20k steps.**
+  Both exported nets (plain and SWA) load in leelaz.
+
 ## Step 3.5: MLX training step, speed and memory (2026-10-06)
 
 `lz.train.Trainer` (compiled grad step, bf16 compute, fp32 master weights),

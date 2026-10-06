@@ -74,6 +74,13 @@ def memory_guard(blocks, filters, batch, dtype, force):
     if projected > budget and not force:
         raise SystemExit("Refusing to start: the projected peak exceeds the "
                          "budget. Lower --batch, use --dtype bf16, or pass --force.")
+    if projected > total // 2:
+        # Measured on a 16 GB M4: 20b x 256 at batch 256 (9-10.5 GiB) ran
+        # 8x slower with everyday apps open, because the system swapped.
+        print("Warning: this needs over half of the machine's memory and may "
+              "swap if other apps are open; --batch %d --macrobatch %d trains "
+              "the same effective batch in less memory."
+              % (max(1, batch // 2), 2))
     mx.set_memory_limit(int(0.9 * total))
 
 
@@ -318,6 +325,7 @@ def main(argv=None):
         finally:
             if test_data:
                 test_data.close()
+    print("Peak MLX memory %.2f GiB" % (mx.get_peak_memory() / 2**30))
     return 0
 
 
