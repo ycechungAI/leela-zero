@@ -302,6 +302,25 @@ With `--ane`: random 15b×192, `--benchmark -v 1600`: **803 n/s** (autotune tabl
 fp16 ANE: batch 8 771, batch 16 827; fp32: 296 / 287). First-run compile: batch 8
 330 s, batch 16 681 s, batch 1 1132 s; cached runs take ~0 s. Stdout stayed clean.
 
+Batch 1 (`-t 1 --batchsize 1`), n/s: 15b×192 ANE 411-430 vs GPU fp16 126-240;
+official 40b×256 ANE 159 vs 49. The ANE stays on at batch 1.
+
+Official 40b×256 autotune (n/s): fp16 ANE batch 8 181, batch 16 180; fp16 GPU
+batch 8/16/32/64 77/82/71/81; fp32 65-71. `--ane --benchmark -v 1600`: **186 n/s**
+(about 2.3x GPU fp16). First-run compile of the batch-8 graph: 728 s.
+
+G2 with `--ane` against `--backend cpu` (`--tol 1e-2 --tol-value 5e-3`), all pass:
+
+| Net, positions | Engine | Prior diff | Winrate diff |
+|---|---|---:|---:|
+| random 15b×192, random play | ANE | 2.8e-3 | 1.9e-3 |
+| official 40b×256, random play | ANE | 1.8e-3 | 4.2e-3 |
+| official 40b×256, random play | GPU fp16 | 2.5e-3 | 2.3e-3 |
+| official 40b×256, its own games | ANE | 3.3e-3 | 3.9e-3 |
+| official 40b×256, its own games | GPU fp16 | 3.3e-3 | 4.8e-3 |
+
+Small nets (32×3, 64×3, 128×3) are not placed on the ANE; 128×6 is.
+
 ### Neural Engine placement (experiment, original notes)
 
 MPSGraph's default optimization level may run the fp16 tower on the Neural

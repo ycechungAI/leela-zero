@@ -73,7 +73,15 @@
   fp32 with auto). The tuning cache has a separate `ane` key, and ANE autotune
   tries only batches 8 and 16. Measured on a random 15b×192 net: first run
   compiled 330 s (batch 8), 681 s (16), 1132 s (batch 1); ~803 n/s end to end;
-  stdout clean. Still to do: G2 on a real network, and the abort at exit.
+  stdout clean. The abort at exit (the ANE helper's mutex is destroyed before
+  the static `Network`) is fixed: after the first ANE warm-up an `atexit` flag
+  makes `~MetalNetwork` leak the compiled graphs. G2 (CPU reference, tolerances
+  1e-2 / 5e-3) passes with `--ane` on the random 15b×192 net and on the official
+  40b×256 net: priors 1.8e-3 to 3.3e-3, winrate 3.9e-3 to 4.2e-3 (GPU fp16 is
+  2.3e-3 to 4.8e-3 on the same positions), so the ANE is no less accurate than
+  GPU fp16. Batch 1 stays on the ANE (15b 411-430 n/s vs 126-240 on the GPU;
+  40b 159 vs 49). Autotune on 40b: ANE fp16 about 180 n/s against about 80 for GPU fp16. The 40b batch-8 graph compiled in 728 s. Small nets (32×3
+  to 128×3) are not placed on the ANE at all; 128×6 is.
 
 ## ADR-005: Raise the engine to C++17
 
