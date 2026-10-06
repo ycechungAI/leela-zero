@@ -178,3 +178,13 @@ jobs:
           $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
           Set-Location src
           & $cdb -g -G -lines -c "!analyze -v; ~*kp; q" ..\build\RelWithDebInfo\tests.exe
+
+  mlx-trainer:
+    name: macOS arm64 / MLX trainer
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Unit tests (training/mlx)
+        working-directory: training/mlx
+        run: uv run --python 3.12 pytest -q

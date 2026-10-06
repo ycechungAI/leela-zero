@@ -136,7 +136,7 @@ Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done
 | Step | Planned | Used | Status | Gates passed | Commit | Notes |
 |------|:-------:|:----:|:------:|--------------|--------|-------|
 | plan | S | Opus 5.5 | ✅ | — | this commit | [13-plan-phase3-mlx.md](13-plan-phase3-mlx.md); decisions D1–D3 resolved in ADR-012 |
-| 3.1 | L | | ⬜ | | | |
+| 3.1 | L | Opus 5.5 | ✅ | `uv run pytest` (MLX 0.32.3 on the M4 GPU); CI job `macOS arm64 / MLX trainer` | this commit | Done by Opus in the planning session (small) |
 | 3.2 | S | | ⬜ | | | |
 | 3.3 | M | | ⬜ | | | |
 | 3.4 | S | | ⬜ | | | |
