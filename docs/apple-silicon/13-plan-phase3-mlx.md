@@ -160,23 +160,14 @@ See decision D2; may finish after the `as.3` tag (spec).
 ### 3.R — Phase review (S)
 `/code-review high` on `training/mlx`, plus the CI job.
 
-## 3. Decisions needed before 3.7/3.8 (owner: user)
+## 3. Decisions (resolved, ADR-012)
 
-- **D1 Tooling download.** uv and the `mlx` / `numpy` / `pytest` wheels come
-  from the network (astral.sh / PyPI). Needed from 3.1 on.
-- **D2 The TF reference for T4/T6.** TF1 has no macOS arm64 wheel, and
-  `training/tf` needs TF 1.x (Python ≤ 3.7). Options: (a) run the TF
-  reference once in a Linux container (`tensorflow/tensorflow:1.15.5`) on CPU
-  — a 6b×64, 20k-step run is hours of CPU time, outside GitHub's 6-hour job
-  limit only just; (b) replace the TF reference with fixed thresholds from
-  this repo's own first MLX run plus the NumPy-checked loss (T1) and the
-  cross-engine parity (T3), i.e. T4 checks learning, not TF equivalence;
-  (c) skip T6 or compare against a public LZ 10b×128 net of similar training
-  data. Recommended: (b) for T4, (c)-style for T6 (match the MLX-trained net
-  against the public net trained on the same window of games).
-- **D3 Training data.** T4 names "the public 0k–10k chunk set". Its size and
-  location need checking before download (D1-style approval); self-play from
-  `selfplay.py` is an alternative for T4's learning check at small scale.
+- **D1 Tooling:** Homebrew `uv` + system Python 3.12; packages from PyPI into
+  `training/mlx/.venv`.
+- **D2 No TF reference:** T1/T2/T3 carry equivalence; T4 checks learning
+  against thresholds from the first MLX run; T6 plays a public LZ net of the
+  same size.
+- **D3 Data:** local self-play from `selfplay.py` with a public net.
 
 ## 4. Pitfalls
 

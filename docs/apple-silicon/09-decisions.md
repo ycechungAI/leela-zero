@@ -245,3 +245,27 @@
 - **Consequences:** Gate results now separate backend error from search
   noise. A backend that made worse moves (not just different near-ties) still
   fails G4.
+
+## ADR-012: Phase 3 gates without a TensorFlow reference; uv tooling; self-play data
+
+- **Status:** Accepted (2026-10-05, Phase 3 plan decisions D1–D3). Amends T4
+  and T6 in 06-spec-training-mlx.md.
+- **Context:** T4 and T6 compare the MLX trainer with a TensorFlow 1.x
+  reference run, but TF1 has no macOS arm64 wheel and `training/tf` needs
+  Python ≤ 3.7. A Linux container on CPU would take hours per run and a large
+  image download. T4 also names the public 0k–10k chunk set, whose download
+  size is unchecked.
+- **Decision:**
+  - D1: tooling is Homebrew `uv` with the system Python 3.12; `uv` installs
+    `mlx`, `numpy` and `pytest` into `training/mlx/.venv`.
+  - D2: no TF reference. Equivalence with tfprocess is carried by T1 (loss and
+    regulariser equal a NumPy reference ≤ 1e-5), T2 (weight round trip through
+    leelaz ≤ 1e-6) and T3 (MLX forward vs leelaz CPU ≤ 1e-4). T4 checks that
+    training learns, against thresholds fixed from the first MLX run and
+    recorded in BENCHMARKS.md. T6 plays the MLX-trained net against a public
+    LZ net of the same size instead of a TF-trained one.
+  - D3: T4 trains on local self-play from `scripts/macos/selfplay.py` with a
+    public net, so nothing large is downloaded.
+- **Consequences:** a subtle training-dynamics difference from tfprocess
+  (for example in BN statistics) would not be caught by a TF run; T3 after
+  training (eval-mode BN) and the T6 match are the backstops.

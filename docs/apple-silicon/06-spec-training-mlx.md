@@ -129,10 +129,10 @@ an accepted legacy form, so existing scripts keep working.
       CPU backend output on 100 positions equals the original net ≤1e-6.
 - [ ] T3 – **cross-engine parity**: MLX forward (fp32, eval mode) vs `leelaz`
       CPU forward on the same exported net ≤1e-4 (policy logits and value).
-- [ ] T4 – learning sanity: training a 6b×64 net on the public 0k–10k chunk
-      set for 20k steps reaches policy accuracy within 2 pts of the TF reference
-      run recorded in BENCHMARKS.md.
+- [ ] T4 – learning sanity: training a 6b×64 net on local self-play data
+      for 20k steps reaches the policy accuracy and losses fixed from the
+      first MLX run in BENCHMARKS.md (no TF reference: ADR-012).
 - [ ] T5 – performance: GPU utilization ≥ 80% (Instruments / `powermetrics`),
       input stall < 5%, and peak RSS ≤ 11 GB for 20b×256 batch 256 bf16.
-- [ ] T6 – strength parity (program success metric 3): 400-game `validation`
-      match, MLX-trained 10b×128 vs TF-trained 10b×128 on the same data, ≥ 50%.
+- [ ] T6 – strength (program success metric 3): 400-game `validation`
+      match, MLX-trained 10b×128 vs a public LZ 10b×128 net (ADR-012).
