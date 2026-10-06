@@ -1,4 +1,4 @@
-# 10 — Model Plan & Tracking (Phases 1–2)
+# 10 — Model Plan & Tracking (Phases 1–3)
 
 Which Claude model should do each step of Phases 1 and 2. Every step is
 logged in the tracking tables below, so you can see what was done by which
@@ -83,6 +83,20 @@ Expected split: about 70% of Phase 1 on M/L.
 Expected split: about half the steps on M/L. The critical path (2.1, 2.4)
 stays on S.
 
+## 5b. Phase 3 — "Train on Mac" (spec 06, plan 13)
+
+| Step | Work | Model | Why |
+|------|------|:-----:|-----|
+| 3.1 | Scaffold `training/mlx` (uv, pytest, CI job) | **L** | Boilerplate |
+| 3.2 | `model.py` + T1 | **S** | Layer-by-layer parity with tfprocess (BN, flatten order, init, loss) decides everything downstream |
+| 3.3 | weights I/O + convert, T2/T3 | **M** (S reviews the gate) | Mechanical given plan 13 §0; the gates catch layout bugs |
+| 3.4 | Shared-memory data pipeline | **S** | Multiprocess shared memory, backpressure and cleanup on macOS `spawn` |
+| 3.5 | `train.py` (compile, dtypes, macrobatch, checkpoints, guard) | **M** (S reviews compile + guard) | Mostly CLI and plumbing; stateful `mx.compile` and memory need a careful eye |
+| 3.6 | SWA + BN refinement | **M** | Small, fully specified (F9) |
+| 3.7 | T4, T5 | **S** | Judging learning curves and profiles |
+| 3.8 | T6 match | **L** run, **S** judge | Long unattended run |
+| 3.R | Phase review before `as.3` | **S** | `/code-review high` |
+
 ## 6. Tracking log
 
 Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done · ⏫ escalated.
@@ -116,3 +130,18 @@ Update a row when a step lands. Status: ⬜ todo · 🔄 in progress · ✅ done
 | 2.11 | S plans → M builds | Opus 5.5 (plan) → Sonnet 5.5 (build) | ✅ | 2.11a ✅: unit test vs CPU (5–7e-7, 4 shapes, batch = single), 2 mutation checks, G2 fp32 on 3 shapes (≤ 8.3e-6), 1.13× / 1.21× OpenCL. 2.11b ✅: fp16 unit test (≤ 2.1e-3 incl. C=256), G2 fp16 at N6 on 3 shapes (≤ 8.0e-3 on 20×256), 1.50× / 1.52× OpenCL. 2.11c ✅: engine in the tuning key + choice, `--metal-kernels`, G2 on 3 shapes × 2 engines × 2 precisions in `full_gate.sh` (so nightly), scheduler stress tests per engine, ASan/UBSan 36 tests, TSan 0 warnings (unit tests and real searches), CPU/OpenCL/Metal+OpenCL builds; default is now 1.57× / 1.52× OpenCL and 2× the old default | `393df9b` (2.11a), `f09d5de` (2.11b), `29ef320` (2.11c) | 2.11d (Opus 5.5): profile (GEMM ~65–70% of GPU time) and a custom `simdgroup_matrix` GEMM go/no-go: 0.84–0.94× MPS, not adopted; the GEMM result is fp32 since `558de70` (real-net accuracy). Spec target (2× / 2.5× OpenCL) not reachable on this path; 2.11e (fusions, ~30% of GPU time) is the only lever left |
 | 2.10 | L | Opus 5.5 | ✅ | CI job `macOS arm64 / Metal`: build + ctest + G2 when the runner has a GPU; nightly `parity-full` (3 shapes × 2 engines × 2 precisions) and Metal ASan + UBSan + API validation green on GitHub (run 37257334371) | `7631ddc`, `ba53da7` | The CI parity step compares fp32 only (`50903c8`); fp16 is gated in the nightly |
 | 2.R | S | Opus 5.5 | ✅ | `/code-review high` on the Phase 2 source diff: 10 findings, 9 fixed; ctest; G2 on 6×64 and 15×192 (both engines and precisions); soak `scripts/macos/soak.py` at -t 16 on 15b×192: 120 min, 12 games, no crash, RSS returns to ~120 MB after every game (peak 638 MB), 0 leaks (`leaks`, 20-min run) | `141f385` | Real bugs: NaN passed the fp16 check and the parity script; a fixed batch size took its precision from other batch sizes; an fp32 fallback kept the fp16 engine/batch; the CI probe matched the CPU-fallback error; the MSL hardcoded 19×19; unit tests wrote the user's tuning cache. Phase exit met after ADR-010/011: 1.22× / 1.34× OpenCL on real nets, G3 (1,330 self-check moves) and G4 (19/20, near-tie rule) pass on the real 15b×192 net |
+
+### Phase 3
+
+| Step | Planned | Used | Status | Gates passed | Commit | Notes |
+|------|:-------:|:----:|:------:|--------------|--------|-------|
+| plan | S | Opus 5.5 | ✅ | — | this commit | [13-plan-phase3-mlx.md](13-plan-phase3-mlx.md); decisions D1–D3 open |
+| 3.1 | L | | ⬜ | | | |
+| 3.2 | S | | ⬜ | | | |
+| 3.3 | M | | ⬜ | | | |
+| 3.4 | S | | ⬜ | | | |
+| 3.5 | M | | ⬜ | | | |
+| 3.6 | M | | ⬜ | | | |
+| 3.7 | S | | ⬜ | | | |
+| 3.8 | L/S | | ⬜ | | | |
+| 3.R | S | | ⬜ | | | |
