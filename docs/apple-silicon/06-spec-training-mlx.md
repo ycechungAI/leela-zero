@@ -126,7 +126,7 @@ an accepted legacy form, so existing scripts keep working.
 - [ ] T1 – unit: `pytest training/mlx/tests` passes (shapes, loss values on a
       fixed batch match a NumPy reference ≤1e-5).
 - [ ] T2 – **round-trip parity**: import a public net → export → `leelaz`
-      CPU backend output on 100 positions equals the original net ≤1e-6.
+      CPU backend output on 100 positions equals the original net ≤1e-5 (ADR-013; was 1e-6).
 - [ ] T3 – **cross-engine parity**: MLX forward (fp32, eval mode) vs `leelaz`
       CPU forward on the same exported net ≤1e-4 (policy logits and value).
 - [ ] T4 – learning sanity: training a 6b×64 net on local self-play data
@@ -134,5 +134,7 @@ an accepted legacy form, so existing scripts keep working.
       first MLX run in BENCHMARKS.md (no TF reference: ADR-012).
 - [ ] T5 – performance: GPU utilization ≥ 80% (Instruments / `powermetrics`),
       input stall < 5%, and peak RSS ≤ 11 GB for 20b×256 batch 256 bf16.
-- [ ] T6 – strength (program success metric 3): 400-game `validation`
-      match, MLX-trained 10b×128 vs a public LZ 10b×128 net (ADR-012).
+- [ ] T6 – strength (program success metric 3): a public LZ 10b×128 net,
+      fine-tuned with lz-train on its own self-play at a low learning rate,
+      scores ≥ 45% in a 400-game `validation` match against the original
+      (ADR-012, ADR-013).

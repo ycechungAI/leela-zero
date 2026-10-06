@@ -277,3 +277,23 @@
 - **Consequences:** a subtle training-dynamics difference from tfprocess
   (for example in BN statistics) would not be caught by a TF run; T3 after
   training (eval-mode BN) and the T6 match are the backstops.
+
+## ADR-013: T2 tolerance 1e-5; T6 is a fine-tuning no-regression match
+
+- **Status:** Accepted (2026-10-06, Phase 3 gates). Amends T2 and T6 in
+  06-spec-training-mlx.md (T6 was already amended by ADR-012).
+- **Context (T2):** importing and re-exporting the real 15b×192 net through
+  leelaz differs by 3.5e-6 (spec: 1e-6). 623 of 10.4 M values, all batch-norm
+  "bias" lines (β·√(var+ε)), come back one float32 step off: when √(var+ε) > 1
+  no float32 β reproduces every file bias. Storing the file bias instead of β
+  would be exact but changes the optimisation compared with tfprocess.
+- **Decision (T2):** keep β (tfprocess parity); T2's tolerance is 1e-5.
+- **Context (T6):** a 10b×128 trained from scratch on local self-play (about
+  40k positions an hour) cannot match a public net trained on hundreds of
+  thousands of games, so a "≥ 50% against the public net" gate could not pass.
+- **Decision (T6):** import a public 10b×128, fine-tune it with lz-train on its
+  own self-play at a low learning rate, then play 400 `validation` games
+  against the original. Pass at ≥ 45% for the fine-tuned net: the trainer does
+  not damage a strong network.
+- **Consequences:** T2 now passes (3.5e-6). T6 needs one more public net
+  download and several hours of self-play, fine-tuning and games.

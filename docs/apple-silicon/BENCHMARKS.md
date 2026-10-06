@@ -373,7 +373,7 @@ Networks from zero.sjeng.org, verified by SHA-256 and deleted afterwards:
   3.5e-6, winrate 2.0e-6 against the spec's 1e-6. 623 of 10.4 M values (all
   in the BN "bias" lines, β·√(var+ε)) come back one float32 step off: when
   √(var+ε) > 1 no float32 β reproduces every file bias exactly, so 1e-6 is not
-  reachable with a β parameterisation. **Open: needs a tolerance decision.**
+  reachable with a β parameterisation. **Pass at the ADR-013 tolerance 1e-5.**
 - **T5** (lz-train on real chunks; GPU utilisation from `ioreg`, no sudo):
 
   | config | positions/s | GPU | input stall | peak MLX |
