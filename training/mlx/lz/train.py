@@ -269,7 +269,7 @@ def main(argv=None):
     os.makedirs(args.export_dir, exist_ok=True)
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
-    stats, timer = Stats(), time.time()
+    stats, timer, waited = Stats(), time.time(), 0.0
     with data.Batches(training, args.batch, shuffle_bytes=shuffle,
                       sample=args.sample) as train_data:
         test_data = (data.Batches(test, args.batch, sample=args.sample,
@@ -277,17 +277,23 @@ def main(argv=None):
                      if test else None)
         try:
             while not args.steps or trainer.step < args.steps:
-                stats.add(trainer.train_batch(*train_data.next()))
+                t0 = time.time()
+                batch = train_data.next()
+                waited += time.time() - t0
+                stats.add(trainer.train_batch(*batch))
                 step = trainer.step
                 if step % args.info_steps == 0:
                     m = stats.mean()
-                    pos_s = args.info_steps * args.batch / (time.time() - timer)
+                    elapsed = time.time() - timer
+                    pos_s = args.info_steps * args.batch / elapsed
+                    # Input stall: time the trainer waited for the data feeder.
                     print("step %d, policy=%g mse=%g reg=%g total=%g "
-                          "acc=%.2f%% (%g pos/s)" % (
+                          "acc=%.2f%% (%g pos/s, input stall %.1f%%)" % (
                               step, m["policy"], m["mse"], m["reg"], m["total"],
-                              100 * m["accuracy"], pos_s), flush=True)
+                              100 * m["accuracy"], pos_s, 100 * waited / elapsed),
+                          flush=True)
                     stats.clear()
-                    timer = time.time()
+                    timer, waited = time.time(), 0.0
                 if test_data and step % args.test_every == 0:
                     t = Stats()
                     for _ in range(args.test_batches):

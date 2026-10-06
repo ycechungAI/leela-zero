@@ -11,6 +11,21 @@ import numpy as np
 from .model import BN_EPSILON, INPUT_PLANES, LeelaZeroNet
 
 
+def bias_from_beta(beta, var):
+    """File "bias" = beta * sqrt(var + eps) (tfprocess's back-compat trick)."""
+    return (beta.astype(np.float64)
+            * np.sqrt(var.astype(np.float64) + BN_EPSILON)).astype(np.float32)
+
+
+def beta_from_bias(bias, var):
+    """The inverse. Not always exact: when sqrt(var + eps) > 1, neighbouring
+    float32 betas map to biases more than one float32 step apart, so an import
+    followed by an export can move a bias by one step (0.006% of the values
+    of a 15b x 192 net)."""
+    scale = np.sqrt(var.astype(np.float64) + BN_EPSILON)
+    return (bias.astype(np.float64) / scale).astype(np.float32)
+
+
 def shape_from_tensors(tensors):
     """(blocks, filters) from a tensor list: 18 + 8 * blocks lines, and the
     first convolution has filters * 18 * 9 weights."""
@@ -32,7 +47,7 @@ def model_to_tensors(model):
         out.append(w.transpose(0, 3, 1, 2).ravel())            # [out,in,kh,kw]
         var = np.asarray(block.bn.running_var, np.float32)
         beta = np.asarray(block.bn.beta, np.float32)
-        out.append(beta * np.sqrt(var + np.float32(BN_EPSILON)))  # file "bias"
+        out.append(bias_from_beta(beta, var))
         out.append(np.asarray(block.bn.running_mean, np.float32))
         out.append(var)
     # Policy conv is conv_blocks()[-2] and value conv [-1], but the file puts
@@ -69,7 +84,7 @@ def tensors_to_model(tensors, model=None):
             w.reshape(out_ch, in_ch, k, k).transpose(0, 2, 3, 1))
         block.bn.running_mean = mx.array(mean)
         block.bn.running_var = mx.array(var)
-        block.bn.beta = mx.array(bias / np.sqrt(var + np.float32(BN_EPSILON)))
+        block.bn.beta = mx.array(beta_from_bias(bias, var))
 
     def load_fc(layer):
         w, b = next(it), next(it)
