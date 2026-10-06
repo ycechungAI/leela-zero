@@ -55,6 +55,8 @@ struct Key {
     // The fp16 rows were measured with the tower on the Neural Engine. The
     // fp32 rows do not depend on it, but are stored per key anyway.
     bool ane = false;
+    // Which tower engine was measured (MPSGraph or Winograd).
+    MetalEngine engine = MetalEngine::Graph;
 };
 
 struct Measurement {
@@ -66,7 +68,16 @@ struct Measurement {
 struct Choice {
     MetalPrecision precision;
     int batch;
+    // Throughput of this configuration, so engines can be compared.
+    double evals_per_sec = 0.0;
+    // Filled in by the caller that knows which engine's table this was.
+    MetalEngine engine = MetalEngine::Graph;
 };
+
+// The Winograd engine's choice if it is at least 5% faster than the MPSGraph
+// engine's, otherwise the MPSGraph one (the better-trodden path). Both
+// choices must come from `choose`.
+Choice choose_engine(const Choice& graph, const Choice& winograd);
 
 // The choice for the measurements. Per precision, the smallest batch within 5%
 // of that precision's best throughput (fewer search threads search better);
@@ -99,7 +110,7 @@ private:
 };
 
 // Times every candidate batch size in both precisions (fp16 on the Neural
-// Engine if ane) with one stream per worker, alternating precisions and taking
+// Engine if ane) of one engine with one stream per worker, alternating precisions and taking
 // medians. Each measurement runs
 // for about target_seconds. progress(batch_rows) is called after each batch
 // size with the rows measured so far. Throws std::runtime_error on GPU
@@ -107,7 +118,7 @@ private:
 std::vector<Measurement> measure(
     const MetalContext& context, int channels, int blocks,
     const ForwardPipe::ForwardPipeWeights& weights, int workers,
-    double target_seconds, bool ane,
+    double target_seconds, bool ane, MetalEngine engine,
     const std::function<void(const std::vector<Measurement>&)>& progress);
 
 } // namespace MetalTuning

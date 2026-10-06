@@ -2,7 +2,8 @@
 
 ## ADR-001: Metal (MPSGraph-first) as the GPU backend, instead of OpenCL
 
-- **Status:** Accepted (pending the Phase 2 benchmark confirmation)
+- **Status:** Accepted. The Phase 2 benchmark triggered the custom-MSL
+  fallback; see ADR-009.
 - **Context:** On Apple Silicon, OpenCL is a deprecated translation layer capped
   at 1.2. It has no fp16 storage extension and no `simdgroup_matrix`, and it
   forces explicit host↔device copies even though memory is unified.
@@ -156,8 +157,99 @@
   temporary file and are renamed, and unreadable rows are skipped, so a
   crashed or concurrent process cannot corrupt it. A user-fixed `--batchsize`
   or `-t` skips the table and times fp32/fp16 at that batch size instead.
+- **Addendum (step 2.11c):** the key also holds the engine (MPSGraph or
+  Winograd), stored as an optional seventh field; rows without it are
+  MPSGraph rows, so existing caches keep working and only the Winograd
+  measurements are new.
 - **Consequences:** Starts are fast after the first, and a new training
   generation costs nothing extra. The thread pool is created after the network
   because autotune can change the thread count. The cache is not invalidated
   by OS or driver updates; `--tune-only` is the remedy, and a stale table only
   costs a slightly suboptimal batch size.
+
+## ADR-009: MPSGraph missed the target; build a Metal Winograd backend
+
+- **Status:** Accepted (Phase 2, step 2.9). Triggers the ADR-001 fallback.
+- **Context:** Measured on the M4 (BENCHMARKS.md, step 2.9), the MPSGraph
+  backend reaches 0.75× OpenCL on random 15b×192 and 40b×256 nets, against
+  targets of 2× and 2.5×. MPSGraph runs direct convolution at ~63% of the
+  GPU's fp32 peak; OpenCL wins because its kernels use Winograd F(4×4, 3×3).
+  ADR-001 set the trigger at missing the target by more than 15%.
+- **Decision:** Add a second Metal network implementation, `MetalWinograd`,
+  behind the same `MetalScheduler`, slots and autotune: port the OpenCL input
+  and output transforms (with fused BN/ReLU/residual) to MSL, and do the 36
+  batched GEMMs with `simdgroup_matrix` (fp16 inputs, fp32 accumulation), then
+  fp32. Keep the MPSGraph network as the correctness reference and as an
+  autotune candidate; autotune picks whichever is faster per shape. Gates as
+  for MPSGraph: G2 at fp32 1e-4 and fp16 N6, the concurrency tests, ASan/TSan.
+- **Outcome (steps 2.11a–c, 2026-10-05):** Winograd with Apple's stock batched
+  matrix multiply and fp16 storage reaches 1.57× OpenCL on 15b×192 and 1.52×
+  on 40b×256 at the autotuned defaults (about 2× the MPSGraph default), and is
+  now the autotune choice. The spec's 2× / 2.5× targets are not met yet; the
+  custom `simdgroup_matrix` GEMM (2.11d) is the remaining lever and needs a
+  profile first. Winograd amplifies fp16 rounding (20×256: 8.0e-3 against the
+  1e-2 limit), so the per-start accuracy check stays essential.
+- **Outcome (step 2.11d, 2026-10-05): custom GEMM not adopted.** A profile
+  (skipping stages) puts the GEMMs at ~65–70% of GPU time and the transforms
+  at ~30–35%; MPS's batched GEMM already runs at 2.1–2.7 TFLOP/s (fp16 in,
+  fp32 out). The go/no-go `simdgroup_matrix` kernels (direct and
+  threadgroup-staged, 8 tilings) reached 0.84–0.94× MPS on the 256-channel
+  shapes, so MPS stays. Even a GEMM at ~80% of peak would give at most ~1.3×,
+  i.e. ~1.75× OpenCL on 40b×256: the 2.5× target is out of reach on this path.
+  Earlier note: since the GEMM result moved to fp32 (`558de70`) the margin is
+  1.4–1.5× OpenCL, at a 7% cost for accuracy on real nets.
+- **Consequences:** Hand-written kernels to maintain (the OpenCL ones already
+  exist as the template). Until it lands, OpenCL is about 1.33× faster than
+  the default Metal backend on these nets, while Metal is 1.9× the CPU.
+  Neural Engine placement (ADR-004 addendum) is a separate, possibly larger
+  win, and does not replace this: it needs fp16, a long first compile and
+  stdout protection.
+
+## ADR-010: Lower the Metal throughput target (N1) to the measured 1.4× OpenCL
+
+- **Status:** Accepted (2026-10-05, after step 2.11d). Amends N1 in
+  01-requirements.md and the Phase 2 exit in 05-spec-metal-backend.md and
+  ROADMAP.md.
+- **Context:** N1 asked for ≥ 2.5× the OpenCL baseline on 40b×256 (and ≥ 2× on
+  15b×192). Both engines have now been built and measured on the M4: MPSGraph
+  reaches 0.75× OpenCL; the Winograd engine 1.4–1.5× (fp32 GEMM result, kept
+  for fp16 accuracy on real nets). The profile puts ~65–70% of the GPU time in
+  the batched GEMMs, which MPS already runs at 2.1–2.7 TFLOP/s, and custom
+  `simdgroup_matrix` kernels did not beat it (BENCHMARKS.md, step 2.11d). A
+  perfect GEMM would give ~1.75×, and fusing the transforms (the other ~30%)
+  perhaps 1.6–1.8× in total. 2.5× is not reachable on this hardware path.
+  OpenCL on macOS is deprecated and stays capped at version 1.2, so the default
+  path still has to be Metal.
+- **Decision:** N1 becomes: the default Metal backend is **≥ 1.3× the tuned
+  OpenCL baseline** on 15b×192 and 40b×256 (measured 1.4–1.5×, leaving room for
+  run-to-run noise), and ≥ 1.5× the CPU backend. Phase 2 exits on that, G2/G3/G4
+  and a clean soak. Step 2.11e (transform fusions) is optional future work, not
+  an exit condition.
+- **Consequences:** `as.2` can be tagged without more kernel work. The
+  OpenCL backend stays buildable for comparison but is no longer a reason to
+  chase throughput. If a future macOS or MPS release changes GEMM speed, the
+  autotune picks it up without code changes.
+
+## ADR-011: G4 compares moves up to near-ties; N1 is 1.2× on real networks
+
+- **Status:** Accepted (2026-10-05, step 2.R gates). Amends G4 in
+  07-spec-testing-benchmarks.md and N1 (ADR-010).
+- **Context (G4):** G4 asked for the same `genmove` as the CPU in ≥ 19/20
+  positions. Once the search was made reproducible (seeded pool threads, ample
+  time per move), the real 15b×192 network gave 18/20 for upstream OpenCL,
+  17/20 for Metal fp32 and 16–18/20 for Metal fp16, and the CPU against itself
+  with only the seed changed gave 16/20 and 17/20. Exact-move agreement
+  measures MCTS's own sensitivity on near-ties, not backend error; no
+  non-CPU backend can meet 19/20.
+- **Decision (G4):** the reference (CPU) searches with `lz-genmove_analyze`. A
+  position passes when the test backend plays the same move, or a move the
+  reference searched whose winrate is within 1% of the reference's choice.
+  ≥ 19/20 must pass. `scripts/parity/gtp_regression.py` implements it.
+- **Context (N1):** ADR-010 set ≥ 1.3× OpenCL from random-network numbers. On
+  the real networks Metal is 1.22× OpenCL on 15b×192 at 1600 visits (1.38× at
+  6400) and 1.34× on 40b×256.
+- **Decision (N1):** ≥ 1.2× the tuned OpenCL baseline on the real 15b×192 and
+  40b×256 networks at the standard `--benchmark` visits, and ≥ 1.5× the CPU.
+- **Consequences:** Gate results now separate backend error from search
+  noise. A backend that made worse moves (not just different near-ties) still
+  fails G4.

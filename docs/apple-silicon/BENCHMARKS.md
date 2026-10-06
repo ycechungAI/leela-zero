@@ -98,6 +98,142 @@ Thread-count sweep (4 runs each, medians; Accelerate BLAS):
   3,451 vs 3,299 (medians of 5). Small gain, within noise; kept to match the
   OpenBLAS/MKL behaviour of one BLAS thread per search thread.
 
+## Phase 2 step 2.9: Metal (MPSGraph) vs OpenCL vs CPU (2026-10-04)
+
+Random nets, M4, `--benchmark` (`-v 1600` on 15b×192, `-v 800` on 40b×256),
+3 interleaved rounds, medians, n/s. OpenCL tuned first (`--tune-only`; it
+reports no fp16 compute, and its autodetect picks half *storage*). Metal's
+autotune cache was warm. All backends ran about 14% below the previous day's
+numbers (machine state), and interleaving keeps the comparison fair.
+
+| Network | OpenCL default (B5, 10 thr) | OpenCL B16, 32 thr | CPU (Accelerate, 10 thr) | Metal fp32 (B8, 16 thr) | Metal autotuned (fp16, B8, 16 thr) | Metal ÷ best OpenCL | Target |
+|---------|---:|---:|---:|---:|---:|---:|---:|
+| random 15b×192 | 432 | **455** | 181 | 310 | 339 | **0.75×** | ≥ 2× |
+| random 40b×256 | 106 | **107** | 48 | 69 | 80 | **0.75×** | ≥ 2.5× |
+
+**Result: MPSGraph misses the target by far.** Metal is 1.9× the CPU but only
+0.75× OpenCL, on both sizes.
+
+Why: one 40b×256 evaluation is ~34.5 GFLOP of direct 3×3 convolution. Metal's
+80 n/s is ~2.8 TFLOPS, about 63% of the M4 GPU's ~4.4 TFLOPS fp32 peak, so
+MPSGraph runs direct convolution well. OpenCL's 106 n/s would be ~3.7 TFLOPS of
+direct-convolution work. It gets there because Leela Zero's OpenCL kernels use
+Winograd F(4×4, 3×3), which needs about 2.5–4× fewer multiplications, and
+MPSGraph does not use Winograd for these layers.
+
+Decision (ADR-009): start the custom MSL Winograd backend (spec 05 Strategy B).
+Porting the OpenCL Winograd kernels to Metal should recover OpenCL's speed
+without OpenCL's copies and translation layer. A `simdgroup_matrix` batched
+GEMM is the route toward the spec's 2–2.5× target: at MPSGraph's 63% of peak,
+Winograd would put 40b×256 near 2× OpenCL. Separately, Neural Engine
+placement measured ~760 n/s on 15b×192 (step 2.5), which would already be
+1.7× OpenCL, if its startup and stdout problems are solved (follow-up task).
+
+Found while running this: OpenCL builds hung at startup since step 2.7 (the
+thread pool was created after the network, but OpenCL's precision autodetect
+runs on it). Fixed in `d0ebb96`, and CI now starts the OpenCL binary.
+
+## Phase 2 step 2.11c: Winograd by default (autotune picks the engine) (2026-10-05)
+
+Autotune now measures both engines (MPSGraph and Winograd) × both precisions ×
+batch 8/16/32/64 per network shape, takes Winograd only if it is at least 5%
+faster, and `--metal-kernels auto|mpsgraph|winograd` can force one. Default
+run (`--benchmark`, autotuned, cache warm), medians of 3 interleaved rounds,
+n/s:
+
+| Network | New default | Autotune's choice | MPSGraph only (the old default) | OpenCL (B16, 32 thr) | CPU (10 thr) | ÷ OpenCL | ÷ old default | ÷ CPU |
+|---------|---:|---|---:|---:|---:|---:|---:|---:|
+| random 15b×192 | **795** | Winograd fp16, batch 16 | 400 | 508 | 226 | **1.57×** | 1.99× | 3.5× |
+| random 40b×256 | **170** | Winograd fp16, batch 32 | 83 | 112 | 51 | **1.52×** | 2.05× | 3.3× |
+
+- Raw GPU throughput per engine (15b×192, evals/s at the best batch size):
+  MPSGraph 381 (fp16) vs Winograd 726 (fp16) and 491 (fp32).
+- The spec targets are still open: 2× OpenCL on 15b×192 and 2.5× on 40b×256.
+  The default is at 1.5× on both. What is left is the GEMM (Apple's stock
+  `MPSMatrixMultiplication` at about a third of the GPU's fp16 peak, estimated
+  from the 8.6 GFLOP of Winograd multiplies per 40b×256 evaluation) and the
+  transforms (memory bound); step 2.11d (custom `simdgroup_matrix` GEMM) or
+  2.11e (fusions) would go after them, after a profile.
+- G2 on 3 shapes × both engines × both precisions, all pass. fp16 Winograd on
+  20×256: 8.0e-3 against the 1e-2 limit (MPSGraph 4.1e-3).
+- Sanitizers: ASan/UBSan 36 tests clean; TSan 0 warnings on the 22 Metal tests
+  and on real 16-thread searches through the Winograd engine in both
+  precisions.
+
+## Phase 2 step 2.11b: Winograd engine, fp16 storage (2026-10-05)
+
+Weights, V, M and activations in fp16; the transforms compute in float
+registers, the heads and batch norm stay fp32, and `MPSMatrixMultiplication`
+multiplies fp16 matrices. Same protocol as 2.11a, medians of 3, n/s.
+
+| Network | OpenCL (B16, 32 thr) | MPSGraph fp16 (B8) | Winograd fp32 (B16) | Winograd fp16 (B8) | Winograd fp16 (B16) | fp16 B16 ÷ OpenCL | ÷ MPSGraph fp16 |
+|---------|---:|---:|---:|---:|---:|---:|---:|
+| random 15b×192 | 395 | 319 | 378 | 593 | **591** | **1.50×** | 1.85× |
+| random 40b×256 | 99 | 73 | 100 | 150 | **150** | **1.52×** | 2.05× |
+
+- fp16 is worth 1.5× over Winograd fp32 here (the engine is memory-bound,
+  not math-bound), and it makes Metal 1.5× OpenCL on both sizes. The spec
+  target is 2× / 2.5×; the remaining gap is what the custom GEMM (2.11d) goes
+  after.
+- Accuracy: the unit test is within 1.3–2.1e-3 of the CPU (0.1% of the
+  output scale) for C = 17, 32 and **256**; the error does not grow with C, so
+  MPS accumulates in fp32. G2 at the N6 tolerances (policy 1e-2, value 5e-3):
+  6×64 1.2e-5, 15×192 1.8e-3, **20×256 8.0e-3** (MPSGraph fp16: 4.5e-3).
+  Winograd amplifies fp16 rounding more, so the margin on large nets is thin:
+  `--precision auto` still checks fp16 against fp32 on the actual network at
+  every start, and takes fp32 if it is outside the tolerance.
+- The scheduler stress tests (12 threads, 1,800 evaluations) pass with the
+  Winograd engine in both precisions.
+
+## Phase 2 step 2.11a: Winograd engine, fp32 (2026-10-05)
+
+First working Winograd network (MSL transforms + `MPSMatrixMultiplication`,
+fp32 storage and math). Random nets, M4, `--benchmark`, 3 interleaved rounds,
+medians, n/s. fp32 only; fp16 and the custom GEMM are later sub-steps. OpenCL
+tuned (`--tune-only`) and run at batch 16 / 32 threads.
+
+| Network | OpenCL (B16, 32 thr) | MPSGraph fp32 (B8) | Winograd fp32 (B8) | Winograd fp32 (B16) | Winograd B16 ÷ OpenCL | ÷ MPSGraph fp32 |
+|---------|---:|---:|---:|---:|---:|---:|
+| random 15b×192 | 363 | 248 | 377 | **411** | **1.13×** | 1.66× |
+| random 40b×256 | 80 | 55 | 93 | **97** | **1.21×** | 1.76× |
+
+- Already past the plan's minimum (at least OpenCL) with fp32 and Apple's
+  stock matrix multiply: no hand-written GEMM, no fusion, one compute encoder
+  per kernel. The spec target (2–2.5× OpenCL) needs fp16 (2.11b) and probably
+  the custom GEMM (2.11d).
+- The day's absolute numbers are lower than on 2026-10-04 for every backend
+  (machine state), so compare within the table.
+- Correctness: the unit test matches the CPU to 5–7e-7 for C = 8, 17, 32 and
+  64 (batch 4 equals batch 1 exactly); dropping the BN mean or the tile
+  border makes it fail (diffs of 0.47 and 0.88). Gate G2 fp32 on 6×64, 15×192
+  and 20×256: worst prior difference 8.3e-6 (limit 1e-4).
+- Layout note: V and M are `[element][tile][channel]` (N×C and N×K per
+  element), so the multiply needs no transposes; this differs from OpenCL's
+  `[element][channel][tile]` in the plan's F3.
+
+## Phase 2 step 2.8: zero-staging input (measured, not implemented) (2026-10-04)
+
+Question: would letting `Network` gather the input planes straight into the
+GPU slot (`forward_into`, spec 05 §3.3) speed anything up? Profile of a
+Metal search on the smallest net, random 6b×64 at the autotuned defaults
+(fp16, batch 16, 32 search threads), `sample` for 8 s:
+
+| | Samples | Share |
+|---|---:|---:|
+| All threads | 25,579 | 100% |
+| Waiting (condition variables, semaphores, work queues) | 25,196 | 98.5% |
+| Busy | 383 | 1.5% |
+| `MetalScheduler::worker` input/output copies | 13 | 0.05% |
+
+The search is GPU-bound even on the smallest net: threads spend almost all
+their time waiting for evaluations. The copy that `forward_into` would remove
+is 0.05% of samples (3% of the little CPU time there is), so it cannot raise
+throughput, and on 15b×192 and larger the ratio is smaller still. It would also
+need the batching redesigned so a search thread can own a slot row before a
+worker picks the batch up (ADR-007 deliberately avoided that shared state).
+Decision: not implemented. Revisit only if a profile ever shows the CPU side
+as the bottleneck.
+
 ## Phase 2 step 2.7: autotune (2026-10-03)
 
 Random nets, M4. Default run (autotuned) against the step 2.4 defaults (fp32,
@@ -204,6 +340,64 @@ Engine:
 - Accuracy on a real network is untested, so `MetalNetwork` pins level 0
   (GPU only). See ADR-004 for the follow-up.
 
+## Step 2.11d: profile and custom GEMM go/no-go (2026-10-05)
+
+Stage profile (search n/s, Winograd fp16, batch 16, two rounds; a stage is
+skipped to see its share):
+
+| net | full | no GEMM | no transforms |
+| --- | --- | --- | --- |
+| 15b×192 | 627 / 665 | 1739 / 1758 | 1082 / 1106 |
+| 40b×256 | 143 / 151 | 462 / 479 | 227 / 257 |
+
+GEMM ≈ 65–70% of GPU time, transforms ≈ 30–35%. Batched GEMM alone (36
+elements, half × half → float, GPU timestamps, median of 20):
+
+| N×C×K | MPS | best custom (direct 2×2 simdgroups of 32×32) | best staged (64×64, BK 16/32) |
+| --- | --- | --- | --- |
+| 400×192×192 | 0.388 ms, 2.74 TFLOP/s | 0.93× | 0.70× |
+| 400×256×256 | 0.793 ms, 2.38 TFLOP/s | 0.84× | 0.76× |
+| 800×256×256 | 1.801 ms, 2.10 TFLOP/s | 0.94× | 0.88× |
+| 1600×256×256 | 3.035 ms, 2.49 TFLOP/s | 0.91× | 0.83× |
+
+No custom kernel beat MPS, so 2.11d stops here (ADR-009).
+
+## Phase 2 soak (2026-10-05)
+
+`scripts/macos/soak.py --minutes 120 -t 16`, random 15b×192 network, Metal
+autotuned (Winograd fp16), 800 visits per move: 12 games, 5,114 moves, no crash
+or hang. RSS rises with the search tree during a game and drops back to
+~120 MB when the next one starts (peak 638 MB in a long game); medians by
+quarter 381 / 375 / 124 MB (second, third, last). A 20-minute run on the
+review-fixed build ended with `leaks`: 0 leaks for 0 bytes. The Accelerate
+per-thread fix from 1.R is speed-neutral: 15b×192 CPU 241→242, 174→173 and
+83→83 n/s at -t 10/4/1 (medians of 3, interleaved).
+
+## Winograd fp16 accuracy on a real network (2026-10-05)
+
+The nightly failed G2 for fp16 Winograd on the random 20×256 stand-in (policy
+0.0137 vs the 1e-2 limit). Emulating fp16 rounding one stage at a time in fp32
+showed no dominant stage (weights, V, M and activations each add 3-4e-3 on the
+random net); on the real 40×256 network M mattered most for the value. M (the
+GEMM result) is now always float: about 7% slower (15×192 B16: ~730 to ~690
+n/s; 40×256: ~171 to ~160), still ~1.4-1.5x OpenCL.
+
+Real 40×256 network (the official best network, downloaded for this check and
+deleted), Metal vs CPU, 8 symmetries x 80 positions of random-play games:
+
+| engine / precision | max policy diff | max winrate diff |
+| --- | --- | --- |
+| MPSGraph fp32 | 2.3e-6 | 3.1e-6 |
+| MPSGraph fp16 | 2.7e-3 | 3.0e-3 |
+| Winograd fp32 | 1.5e-6 | 3.4e-6 |
+| Winograd fp16 before (half M) | 2.3e-3 | **6.0e-3 (over the 5e-3 limit)** |
+| Winograd fp16 after (float M) | 2.8e-3 | 2.5e-3 |
+
+Random-weight stand-ins are a worst case whose fp16 error varies about 2x with
+the positions played, so `full_gate.sh` gives them a 2e-2 policy limit
+(`FP16_POLICY_TOL`); real networks keep N6 (1e-2 / 5e-3). The random 20×256
+fp16 Winograd row is 5.6e-3 locally after the change (6.5e-3 before).
+
 ## Phase 2 step 2.4: MetalScheduler (batched, asynchronous) (2026-10-03)
 
 Random nets, M4, fp32. Interleaved, 3 runs, medians, n/s.
@@ -267,6 +461,7 @@ in step 2.4.
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 15b×192, 3 positions × 8 symmetries | 3.7e-7 | 0 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized vs pre-change (Accelerate) | random 6b×64, same | 2.8e-9 | 1.2e-7 | PASS (tol 1e-5) |
 | G1 | 1.4a vectorized (Accelerate) vs Eigen 3.4 | random 15b×192, same | 3.4e-7 | 0 | PASS (tol 1e-5) |
+| G2 | Metal Winograd vs CPU, fp32 and fp16 | random 6×64, 15×192, 20×256, 100 positions × 8 symmetries | fp32 ≤ 6.8e-6; fp16 ≤ 8.0e-3 (20×256) | — | PASS (1e-4 / N6 1e-2) |
 | G2 | Metal fp16 vs CPU (`--cpu-only`) | random 15b×192, 3 positions × 8 symmetries | 3.4e-4 | 2.5e-5 | PASS (N6: 1e-2 / 5e-3) |
 | G2 | Metal fp16 vs CPU (`--cpu-only`) | random 6b×64, same | 3.2e-6 | 1.1e-4 | PASS (N6: 1e-2 / 5e-3) |
 | G2 | Metal fp32 vs CPU (`--cpu-only`) | random 6b×64, 3 positions × 8 symmetries | 3.0e-9 | 1.8e-7 | PASS (tol 1e-4) |
@@ -274,10 +469,41 @@ in step 2.4.
 | — | Metal vs CPU raw head outputs (unit test, C=8, 2 blocks, non-trivial BN) | 4 random inputs | 6.0e-7 | — | PASS (tol 1e-4; batch 4 = batch 1 exactly) |
 | G1 | 1.4a scalar fallback (MSVC path) vs pre-change | random 6b×64, 2 positions × 8 symmetries | 3.0e-9 | 6.0e-8 | PASS (tol 1e-5) |
 
-## Official baseline (to do)
+## Official baseline: real networks (step 1.5, 2026-10-05)
 
-| Backend | 15b×192 n/s | 40b×256 n/s | Notes |
-|---------|------------:|------------:|-------|
-| OpenCL (upstream path) | — | — | |
-| CPU Eigen | — | — | |
-| CPU Accelerate | — | — | |
+M4 Mac mini (4P+6E, 10-core GPU), macOS 27.0.1, commit `c44465b`. Networks
+from zero.sjeng.org, verified by SHA-256 and deleted afterwards: 15b×192
+`d351f06e…` (the last 15-block net) and 40b×256 `0e9ea880…` (the final best
+network). `--benchmark` (n/s), 3 interleaved rounds, medians; OpenCL tuned
+first, Metal autotuned first (fresh cache).
+
+| Backend | 15b×192, 1600 v | 40b×256, 800 v | Notes |
+|---------|----------------:|---------------:|-------|
+| OpenCL (B16, t32) | 558 | 117 | upstream kernels, tuned |
+| CPU Eigen (t10) | 99 | 22 | |
+| CPU Accelerate (t10) | 225 | 50 | **2.3× Eigen** (Phase 1 exit ≥ 1.5×) |
+| Metal (autotuned: Winograd fp16) | 682 | 157 | **1.22× / 1.34× OpenCL**, 3.0× / 3.1× Accelerate |
+
+The first Metal round on 15b×192 (377) was an outlier and is excluded by the
+median. On the real 15b×192 net Metal's lead depends on search length: at
+1600 visits 1.25× (710 vs 568, a second set of rounds), at 6400 visits 1.38×
+(775 vs 560). Fixing the batch and threads by hand (B8/16/32) gives the same
+690–720 n/s, so the autotune choice is not the cause. Random nets of the same
+shapes gave 1.57× / 1.52× (step 2.11c), so random-net ratios overstate Metal
+somewhat on real nets.
+
+### Gates G3 and G4 on the real 15b×192 network (2026-10-05)
+
+- **G3** (`USE_METAL_SELFCHECK`, 1 in 2000 evaluations checked against the
+  CPU): 6 self-play games at 200 visits, 1,330 moves (~130 checks), no
+  mismatch. Pass.
+- **G4** (`scripts/parity/gtp_regression.py`: 20 positions from the G3 games,
+  `genmove` at 1600 playouts, `-t 1 -s 1`, no noise, ample time): leelaz's
+  search was not reproducible across processes (pool threads seeded their RNG
+  from the thread id; the default one-hour time budget cut long searches
+  short); both are fixed. Exact same move as the CPU: OpenCL 18/20, Metal fp32
+  17/20, Metal fp16 16–18/20, and the CPU against itself with another seed
+  16/20 and 17/20, so exact agreement measures search noise on near-ties.
+  With the ADR-011 rule (same move, or within 1% winrate in the CPU's
+  search): Metal fp16 19/20 (18 same), **pass**; the reseeded CPU 19/20 and
+  20/20.

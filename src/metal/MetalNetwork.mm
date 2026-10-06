@@ -31,13 +31,16 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "MetalContextImpl.h"
+#include "MetalWinograd.h"
 #include "Network.h"
 #include "Utils.h"
 
@@ -275,6 +278,7 @@ struct MetalSlot::Impl {
     MPSGraphTensorData* in_data = nil;
     MPSGraphTensorData* pol_data = nil;
     MPSGraphTensorData* val_data = nil;
+    WinogradScratch wino; // used by the Winograd engine only
 };
 
 MetalSlot::MetalSlot() : m_impl(std::make_unique<Impl>()) {}
@@ -300,6 +304,11 @@ struct MetalNetwork::Impl {
     id<MTLDevice> device = nil;
     id<MTLCommandQueue> queue = nil;
     std::map<int, Compiled> graphs; // by batch size; fixed after construction
+    // Winograd engine: no graphs; one shared net, and the batch sizes it
+    // accepts. run() on it takes no lock: every call has its own command
+    // buffer and scratch.
+    std::unique_ptr<WinogradNet> wino;
+    std::set<int> wino_batches;
     // MPSGraphExecutable encoding is serialized; execution still overlaps.
     std::mutex encode_mutex;
     // Lazily created slots for forward() (tests only).
@@ -310,10 +319,15 @@ MetalNetwork::MetalNetwork(const MetalContext& ctx, const int channels,
                            const int residual_blocks,
                            const ForwardPipe::ForwardPipeWeights& weights,
                            const std::vector<int>& batch_sizes,
-                           const MetalPrecision precision, const bool ane)
+                           const MetalPrecision precision, const bool ane,
+                           const MetalEngine engine)
     : m_impl(std::make_unique<Impl>()) {
-    // The Neural Engine runs the fp16 tower only.
+    // The Neural Engine runs the fp16 tower only, through MPSGraph.
     const auto use_ane = ane && precision == MetalPrecision::Half;
+    if (engine == MetalEngine::Winograd && use_ane) {
+        throw std::runtime_error(
+            "Metal: the Neural Engine needs the MPSGraph engine");
+    }
     @autoreleasepool {
         m_impl->device = ctx.impl().device;
         m_impl->queue = ctx.impl().queue;
@@ -325,6 +339,13 @@ MetalNetwork::MetalNetwork(const MetalContext& ctx, const int channels,
             if (batch < 1) {
                 throw std::runtime_error("Metal: invalid batch size");
             }
+        }
+        if (engine == MetalEngine::Winograd) {
+            m_impl->wino = std::make_unique<WinogradNet>(
+                m_impl->device, m_impl->queue, channels, residual_blocks,
+                weights, precision);
+            m_impl->wino_batches.insert(batch_sizes.begin(), batch_sizes.end());
+            return;
         }
         if (use_ane) {
             Utils::myprintf_error(
@@ -377,7 +398,9 @@ MetalNetwork::~MetalNetwork() {
 }
 
 std::unique_ptr<MetalSlot> MetalNetwork::make_slot(const int batch) const {
-    if (m_impl->graphs.count(batch) == 0) {
+    const auto winograd = m_impl->wino != nullptr;
+    if (winograd ? m_impl->wino_batches.count(batch) == 0
+                 : m_impl->graphs.count(batch) == 0) {
         throw std::logic_error("Metal: no graph compiled for batch size "
                                + std::to_string(batch));
     }
@@ -400,6 +423,10 @@ std::unique_ptr<MetalSlot> MetalNetwork::make_slot(const int batch) const {
         if (s.in_buf == nil || s.pol_buf == nil || s.val_buf == nil) {
             throw std::runtime_error("Metal: could not allocate shared buffers");
         }
+        if (winograd) {
+            s.wino = m_impl->wino->make_scratch(batch);
+            return slot;
+        }
         s.in_data = [[MPSGraphTensorData alloc]
             initWithMTLBuffer:s.in_buf
                         shape:shape4(batch, PLANES, B, B)
@@ -419,6 +446,10 @@ std::unique_ptr<MetalSlot> MetalNetwork::make_slot(const int batch) const {
 void MetalNetwork::run(MetalSlot& slot) const {
     @autoreleasepool {
         auto& s = *slot.m_impl;
+        if (m_impl->wino) {
+            m_impl->wino->run(s.wino, s.in_buf, s.pol_buf, s.val_buf);
+            return;
+        }
         const auto it = m_impl->graphs.find(s.batch);
         if (it == m_impl->graphs.end()) {
             throw std::logic_error("Metal: slot batch size has no graph");

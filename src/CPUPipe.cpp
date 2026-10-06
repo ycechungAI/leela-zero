@@ -229,11 +229,13 @@ void CPUPipe::winograd_transform_in(const std::vector<float>& in,
     for (auto c0 = 0; c0 < C; c0 += lanes) {
         const auto valid = std::min(lanes, C - c0);
         for (auto lane = 0; lane < lanes; lane++) {
-            const auto src = &in[(c0 + lane) * (W * H)];
+            // Only form a pointer into `in` for real channels: past C it
+            // would point beyond the end of the vector.
+            const auto src = lane < valid ? &in[(c0 + lane) * (W * H)] : nullptr;
             for (auto yin = 0; yin < H; yin++) {
                 for (auto xin = 0; xin < W; xin++) {
                     pad(yin + 1, xin + 1)[lane] =
-                        lane < valid ? src[yin * W + xin] : 0.0f;
+                        src != nullptr ? src[yin * W + xin] : 0.0f;
                 }
             }
         }

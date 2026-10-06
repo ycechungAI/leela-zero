@@ -527,12 +527,15 @@ std::vector<GameState> metal_check_positions() {
 //    measure every batch size in both precisions, or load the measurements
 //    cached for this device and network shape, and pick the batch size (and,
 //    for --precision auto, the precision) from them. The thread count follows
-//    the batch size.
+//    the batch size. With a user-fixed batch size the measurements only pick
+//    the engine (when both are allowed).
 // 2. Build the pipe. Precision auto takes fp16 only if it is accurate on this
 //    network (N6 tolerances: policy 1e-2, value 5e-3, on a handful of
 //    positions through the whole head pipeline) and the measurements say it is
-//    at least 5% faster; with a user-fixed batch size there are no cached
-//    measurements, so both precisions are timed right here.
+//    at least 5% faster; with a user-fixed batch size both precisions are
+//    timed right here, at that batch size. If fp16 fails the check after
+//    autotune, the engine and batch size are chosen again among the fp32
+//    measurements.
 //    With --ane the fp16 pipe runs on the Neural Engine; its graphs are
 //    compiled (minutes the first time) and warmed up inside the constructor,
 //    so no compile ever happens during a search. The accuracy check always
@@ -544,60 +547,108 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         static_cast<int>((m_fwd_weights->m_conv_weights.size() - 1) / 2);
     constexpr auto workers = MetalScheduler::DEFAULT_WORKERS;
 
+    // The engines that may compute the tower. The Neural Engine runs through
+    // MPSGraph.
+    std::vector<MetalEngine> engines;
+    if (cfg_ane || cfg_metal_kernels == metal_kernels_t::MPSGRAPH) {
+        engines = {MetalEngine::Graph};
+    } else if (cfg_metal_kernels == metal_kernels_t::WINOGRAD) {
+        engines = {MetalEngine::Winograd};
+    } else {
+        engines = {MetalEngine::Graph, MetalEngine::Winograd};
+    }
+    const auto engine_name = [](const MetalEngine e) {
+        return e == MetalEngine::Winograd ? "Winograd" : "MPSGraph";
+    };
+
+    // Measurements are needed to pick the batch size, or the engine, or both.
     std::optional<MetalTuning::Choice> tuned;
-    if (cfg_autotune_batch || cfg_tune_only) {
+    // Measurements per engine, kept to re-choose if fp16 fails the check.
+    std::vector<std::pair<MetalEngine, std::vector<MetalTuning::Measurement>>>
+        tables;
+    const auto choose_from = [&tables](const bool allow_single,
+                                       const bool allow_half) {
+        std::optional<MetalTuning::Choice> best;
+        for (const auto& [engine, table] : tables) {
+            auto choice = MetalTuning::choose(table, allow_single, allow_half);
+            choice.engine = engine;
+            best = best ? MetalTuning::choose_engine(*best, choice) : choice;
+        }
+        return *best;
+    };
+    if (cfg_autotune_batch || cfg_tune_only || engines.size() > 1) {
         std::string error;
         const auto context = MetalContext::create(error);
         if (!context) {
             throw std::runtime_error("Metal: " + error);
         }
-        const MetalTuning::Key key{context->device_name(), channels, blocks,
-                                   cfg_ane};
         const MetalTuning::Cache cache(MetalTuning::Cache::default_path());
-        std::vector<MetalTuning::Measurement> table;
-        const auto shape = key.device + ", " + std::to_string(channels)
-                           + " channels, " + std::to_string(blocks)
-                           + " blocks";
-        auto print_table = true;
-        if (!cfg_tune_only && cache.load(key, table)) {
-            myprintf("Metal autotune: cached measurements for %s.\n",
-                     shape.c_str());
-            print_table = false;
-        } else {
-            myprintf("Metal autotune: measuring %s%s (once per network "
-                     "shape)...\n",
-                     shape.c_str(), cfg_ane ? ", Neural Engine" : "");
-            table = MetalTuning::measure(*context, channels, blocks,
-                                         *m_fwd_weights, workers, 0.25,
-                                         cfg_ane, {});
-            if (!cache.store(key, table)) {
-                myprintf("Metal autotune: could not save the measurements to "
-                         "%s.\n",
-                         MetalTuning::Cache::default_path().c_str());
+        const auto shape = context->device_name() + ", "
+                           + std::to_string(channels) + " channels, "
+                           + std::to_string(blocks) + " blocks";
+        for (const auto engine : engines) {
+            const MetalTuning::Key key{context->device_name(), channels,
+                                       blocks, cfg_ane, engine};
+            std::vector<MetalTuning::Measurement> table;
+            auto print_table = true;
+            if (!cfg_tune_only && cache.load(key, table)) {
+                myprintf("Metal autotune: cached measurements for %s, %s.\n",
+                         shape.c_str(), engine_name(engine));
+                print_table = false;
+            } else {
+                myprintf("Metal autotune: measuring %s, %s%s (once per "
+                         "network shape)...\n",
+                         shape.c_str(), engine_name(engine),
+                         cfg_ane ? ", Neural Engine" : "");
+                table = MetalTuning::measure(*context, channels, blocks,
+                                             *m_fwd_weights, workers, 0.25,
+                                             cfg_ane, engine, {});
+                if (!cache.store(key, table)) {
+                    myprintf("Metal autotune: could not save the measurements "
+                             "to %s.\n",
+                             MetalTuning::Cache::default_path().c_str());
+                }
             }
-        }
-        if (print_table) {
-            myprintf("%s", MetalTuning::format_table(table).c_str());
+            if (print_table) {
+                myprintf("%s", MetalTuning::format_table(table).c_str());
+            }
+            tables.emplace_back(engine, std::move(table));
         }
         if (cfg_tune_only) {
             myprintf("Measurements saved to %s.\n",
                      MetalTuning::Cache::default_path().c_str());
             exit(EXIT_SUCCESS);
         }
-        tuned = MetalTuning::choose(table, cfg_precision != precision_t::HALF,
-                                    cfg_precision != precision_t::SINGLE);
-        if (cfg_autotune_batch) {
+        tuned = choose_from(cfg_precision != precision_t::HALF,
+                            cfg_precision != precision_t::SINGLE);
+        if (!cfg_autotune_batch) {
+            myprintf("Metal autotune: %s (the batch size is fixed).\n",
+                     engine_name(tuned->engine));
+        } else {
+            myprintf("Metal autotune: %s, %s, %.0f evals/s at batch %d.\n",
+                     engine_name(tuned->engine),
+                     tuned->precision == MetalPrecision::Half ? "fp16" : "fp32",
+                     tuned->evals_per_sec, tuned->batch);
             cfg_batch_size = tuned->batch;
-            cfg_num_threads = std::min<size_t>(MAX_CPUS, tuned->batch * workers);
+            cfg_num_threads =
+                std::min<size_t>(MAX_CPUS, tuned->batch * workers);
             myprintf("Metal autotune: batch %d, %d threads.\n", cfg_batch_size,
                      cfg_num_threads);
         }
     }
+    auto engine = tuned ? tuned->engine : engines[0];
+    if (!cfg_autotune_batch) {
+        // The batch size is the user's, and the measurements are at other
+        // batch sizes: they pick the engine only, and the precision is timed
+        // below at the batch size that will run.
+        tuned.reset();
+    }
 
-    const auto make = [this, channels](const MetalPrecision precision,
-                                       const bool ane = false) {
+    const auto make = [this, channels, &engine](const MetalPrecision precision,
+                                                const bool ane = false) {
         auto pipe = std::make_unique<MetalScheduler>(
-            cfg_batch_size, MetalScheduler::DEFAULT_WORKERS, precision, ane);
+            cfg_batch_size, MetalScheduler::DEFAULT_WORKERS, precision, ane,
+            engine);
         pipe->initialize(channels);
         pipe->push_weights(WINOGRAD_ALPHA, INPUT_CHANNELS, channels,
                            m_fwd_weights);
@@ -642,7 +693,13 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
     const auto ref = evaluate(single);
     const auto test = evaluate(half);
     auto policy_diff = 0.0f, value_diff = 0.0f;
+    auto finite = true;
     for (auto i = size_t{0}; i < ref.size(); i++) {
+        finite = finite && std::isfinite(test[i].winrate)
+                 && std::isfinite(test[i].policy_pass);
+        for (const auto p : test[i].policy) {
+            finite = finite && std::isfinite(p);
+        }
         for (auto j = size_t{0}; j < ref[i].policy.size(); j++) {
             policy_diff = std::max(
                 policy_diff, std::abs(ref[i].policy[j] - test[i].policy[j]));
@@ -652,7 +709,8 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         value_diff =
             std::max(value_diff, std::abs(ref[i].winrate - test[i].winrate));
     }
-    const auto accurate = policy_diff <= 1e-2f && value_diff <= 5e-3f;
+    // std::max drops NaN, so a non-finite fp16 output is checked separately.
+    const auto accurate = finite && policy_diff <= 1e-2f && value_diff <= 5e-3f;
     myprintf("Metal: half differs from single by %.1e (policy) and %.1e "
              "(value).\n",
              policy_diff, value_diff);
@@ -668,6 +726,21 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
         myprintf("Using Metal single precision (half%s is outside the "
                  "tolerance).\n",
                  cfg_ane ? " on the Neural Engine" : "");
+        if (tuned) {
+            // The engine and batch were picked for fp16; pick them again
+            // among the fp32 measurements.
+            const auto choice = choose_from(true, false);
+            if (choice.engine != engine
+                || static_cast<unsigned>(choice.batch) != cfg_batch_size) {
+                engine = choice.engine;
+                cfg_batch_size = choice.batch;
+                cfg_num_threads =
+                    std::min<size_t>(MAX_CPUS, choice.batch * workers);
+                myprintf("Metal autotune: %s, fp32, batch %d, %d threads.\n",
+                         engine_name(engine), cfg_batch_size, cfg_num_threads);
+                single = make(MetalPrecision::Single);
+            }
+        }
     } else if (cfg_precision == precision_t::HALF) {
         use_half = true;
         myprintf("Using Metal half precision.\n");
@@ -710,14 +783,13 @@ std::unique_ptr<ForwardPipe> Network::init_metal(const int channels) {
 void Network::initialize(const int playouts, const std::string& weightsfile) {
 #ifdef USE_BLAS
 #ifdef __APPLE__
-    // Search threads provide the parallelism; keep each sgemm on its own
-    // thread, like openblas_set_num_threads(1) below.
-    if (__builtin_available(macOS 15.0, *)) {
-        BLASSetThreading(BLAS_THREADING_SINGLE_THREADED);
-    }
+    // The search threads set this for themselves (Platform::init_search_thread);
+    // this covers callers that evaluate on their own thread, such as tests.
+    const auto single = Platform::set_blas_single_threaded();
     const auto feature = Platform::cpu_feature_string();
-    myprintf("BLAS Core: Apple Accelerate%s.\n",
-             feature.empty() ? "" : (" (" + feature + ")").c_str());
+    myprintf("BLAS Core: Apple Accelerate%s, %s.\n",
+             feature.empty() ? "" : (" (" + feature + ")").c_str(),
+             single ? "single-threaded per call" : "multi-threaded per call");
 #else
 #ifdef USE_OPENBLAS
     openblas_set_num_threads(1);
@@ -804,6 +876,9 @@ void Network::initialize(const int playouts, const std::string& weightsfile) {
         } catch (const std::exception& e) {
             myprintf("%s; falling back to the CPU.\n", e.what());
             m_forward = init_net(channels, std::make_unique<CPUPipe>());
+#ifdef USE_GPU_SELFCHECK
+            m_forward_cpu.reset(); // nothing to check against itself
+#endif
         }
     }
 #endif

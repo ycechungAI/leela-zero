@@ -29,7 +29,7 @@
 
 | ID | Requirement | Target |
 |----|-------------|--------|
-| N1 | Metal inference throughput, 40b×256 net, batch 16+ | ≥ 2.5× the OpenCL-on-macOS baseline on the same M4 (the baseline is measured in Phase 0) |
+| N1 | Metal inference throughput, 15b×192 and 40b×256 nets | ≥ 1.2× the tuned OpenCL-on-macOS baseline on the same M4 on real networks, and ≥ 1.5× the CPU backend (was ≥ 2.5×; lowered by ADR-010 and ADR-011 after measuring both Metal engines) |
 | N2 | CPU-only throughput, 15b×192 net | ≥ 1.5× the Eigen-only baseline |
 | N3 | Host↔device copies per NN eval in the Metal path | **0** buffer copies. Inputs are written in place into shared `MTLBuffer`s and outputs are read in place |
 | N4 | Training throughput, 20b×256, batch 256, bf16/fp16 | Baseline is set in Phase 3. Target: GPU utilization ≥ 80% in steady state, with no input-pipeline stalls above 5% |

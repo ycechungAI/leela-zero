@@ -32,6 +32,10 @@ class MetalNetwork;
 // and outputs are fp32 in both modes (the cast is part of the graph).
 enum class MetalPrecision { Single, Half };
 
+// How the tower is computed: Graph is MPSGraph direct convolution; Winograd is
+// the Winograd F(4x4, 3x3) kernels in MetalWinograd.mm (step 2.11).
+enum class MetalEngine { Graph, Winograd };
+
 // Shared-memory input and output buffers for one batch size. The CPU writes
 // the inputs and reads the outputs in place; the GPU uses the same memory, so
 // nothing is copied to or from the device. A slot must be used by one thread
@@ -73,7 +77,7 @@ public:
                  const ForwardPipe::ForwardPipeWeights& weights,
                  const std::vector<int>& batch_sizes,
                  MetalPrecision precision = MetalPrecision::Single,
-                 bool ane = false);
+                 bool ane = false, MetalEngine engine = MetalEngine::Graph);
     ~MetalNetwork();
     MetalNetwork(const MetalNetwork&) = delete;
     MetalNetwork& operator=(const MetalNetwork&) = delete;

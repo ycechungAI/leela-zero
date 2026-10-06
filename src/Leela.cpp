@@ -237,6 +237,9 @@ static void parse_commandline(const int argc, const char* const argv[]) {
                       "Default is to auto which automatically determines which one to use.")
 #endif
 #ifdef USE_METAL
+        ("metal-kernels", po::value<std::string>(),
+                          "Metal: how the network is computed: auto, mpsgraph or winograd.\n"
+                          "Default is auto: autotune measures both and takes the faster.")
         ("ane", "Metal: run the fp16 network on the Neural Engine (experimental).\n"
                 "Needs fp16 (--precision half, or auto when fp16 is chosen). The first run\n"
                 "of a network compiles for several minutes; off by default.")
@@ -419,12 +422,29 @@ static void parse_commandline(const int argc, const char* const argv[]) {
     select_backend(vm);
 
 #ifdef USE_METAL
+    if (vm.count("metal-kernels")) {
+        const auto kernels = vm["metal-kernels"].as<std::string>();
+        if (kernels == "auto") {
+            cfg_metal_kernels = metal_kernels_t::AUTO;
+        } else if (kernels == "mpsgraph") {
+            cfg_metal_kernels = metal_kernels_t::MPSGRAPH;
+        } else if (kernels == "winograd") {
+            cfg_metal_kernels = metal_kernels_t::WINOGRAD;
+        } else {
+            printf("Unexpected option for --metal-kernels, expecting "
+                   "auto/mpsgraph/winograd\n");
+            exit(EXIT_FAILURE);
+        }
+    }
     if (vm.count("ane")) {
         if (cfg_backend != backend_t::METAL) {
             fprintf(stderr, "Ignoring --ane: it needs the Metal backend.\n");
         } else if (cfg_precision == precision_t::SINGLE) {
             fprintf(stderr, "Ignoring --ane: the Neural Engine runs fp16 only, "
                             "but --precision single was given.\n");
+        } else if (cfg_metal_kernels == metal_kernels_t::WINOGRAD) {
+            fprintf(stderr, "Ignoring --ane: the Neural Engine runs through "
+                            "MPSGraph, but --metal-kernels winograd was given.\n");
         } else {
             cfg_ane = true;
         }
@@ -451,8 +471,9 @@ static void parse_commandline(const int argc, const char* const argv[]) {
     }
     if (Platform::num_eff_cores() > 0) {
         myprintf("Using %d thread(s) (%d performance + %d efficiency cores).\n",
-                 cfg_num_threads, Platform::num_perf_cores(),
-                 Platform::num_eff_cores());
+                 cfg_num_threads,
+                 static_cast<int>(Platform::num_perf_cores()),
+                 static_cast<int>(Platform::num_eff_cores()));
     } else {
         myprintf("Using %d thread(s).\n", cfg_num_threads);
     }
@@ -597,16 +618,32 @@ void init_global_objects() {
 
     Utils::create_z_table();
 
-    // The network may change cfg_num_threads (Metal autotune), so the pool is
-    // created after it.
+    // Search threads ask for performance cores and single-threaded
+    // Accelerate (no-ops off Apple Silicon). Each one seeds its random
+    // generator from the seed and its index, not from its thread id, so that
+    // a fixed --seed gives the same search in every process (gate G4).
+    auto pool_size = size_t{0};
+    const auto grow_pool = [&pool_size]() {
+        for (; pool_size < cfg_num_threads; pool_size++) {
+            const auto index = std::uint64_t{pool_size + 1};
+            thread_pool.add_thread([index]() {
+                Platform::init_search_thread();
+                Random::get_Rng().seedrandom(
+                    cfg_rng_seed + index * 0x9E3779B97F4A7C15ULL);
+            });
+        }
+    };
+    // The pool must exist before the network: OpenCL's precision autodetect
+    // (Network::benchmark_time) runs its evaluations on it.
+    grow_pool();
+    // The main thread also searches.
+    Platform::init_search_thread();
+
     initialize_network();
 
-    // Search threads ask for performance cores (a no-op off Apple Silicon).
-    for (auto i = size_t{0}; i < cfg_num_threads; i++) {
-        thread_pool.add_thread([]() { Platform::set_thread_qos_interactive(); });
-    }
-    // The main thread also searches.
-    Platform::set_thread_qos_interactive();
+    // Metal autotune may have raised cfg_num_threads. (If it lowered it, the
+    // extra pool threads just stay idle: searches start cfg_num_threads tasks.)
+    grow_pool();
 }
 
 void benchmark(GameState& game) {

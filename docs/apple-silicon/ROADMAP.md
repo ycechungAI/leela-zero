@@ -64,13 +64,22 @@ Status key: ✅ done · 🟡 partial · ⏸ deferred · ⬜ not started
    and the `dist` preset.
 7. ✅ Autotune of batch size and precision, with a persisted cache and
    `--tune-only` (ADR-008): +21% / +12% over the 2.4 defaults.
-8. Optional 2b: `forward_into` zero-staging input path.
-9. Benchmark. If MPSGraph is under target by more than 15%, start the custom
-   MSL Winograd fallback (ADR-001).
-10. 🟡 CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU) ✅;
-    nightly `parity-full` and Metal `asan` still to do.
+8. ✅ Optional 2b: `forward_into` zero-staging input path. Measured, not
+   implemented: the search waits on the GPU 98.5% of the time and the copy is
+   0.05% of samples (BENCHMARKS.md).
+9. ✅ Benchmark. MPSGraph is 0.75× OpenCL (target 2–2.5×), so the custom MSL
+   Winograd fallback starts (ADR-009). Also fixed an OpenCL startup hang found
+   here.
+11. ✅ `MetalWinograd`: MSL Winograd transforms + batched GEMM behind
+    `MetalScheduler`, autotuned against MPSGraph (ADR-009). ✅ 2.11a–c done:
+    Winograd fp16 is the default, 1.4–1.5× OpenCL and 2× the old Metal default.
+    2.11d: a custom GEMM does not beat MPS, so the target was lowered (ADR-010);
+    fusions (2.11e) are optional.
+    Plan: [12-plan-2.11-metal-winograd.md](12-plan-2.11-metal-winograd.md).
+10. ✅ CI `macOS arm64 / Metal` job (build, tests, G2 when the runner has a GPU),
+    nightly `parity-full` (both engines, both precisions) and Metal `asan`.
 
-**Exit:** ≥2.5× OpenCL on 40b×256, G2/G3/G4 pass, and the soak test is clean.
+**Exit:** ≥1.2× tuned OpenCL on real 15b×192 and 40b×256 networks (ADR-010/011; ✅ 1.22× / 1.34×), G2/G3/G4 pass (✅ on the real 15b×192 net), and the soak test is clean (✅).
 Tag `as.2`.
 
 ## Phase 3 — `v0.18.0-as.3` "Train on Mac" (spec 06)

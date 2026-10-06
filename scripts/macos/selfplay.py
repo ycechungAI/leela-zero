@@ -9,6 +9,7 @@ substitute for autogtp; it does not talk to any server.
 """
 import argparse
 import os
+import shlex
 import sys
 import time
 
@@ -39,7 +40,8 @@ def play_game(gtp, max_moves):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--leelaz", required=True)
+    ap.add_argument("--leelaz", required=True,
+                    help="leelaz command, with optional extra arguments")
     ap.add_argument("-w", "--weights", required=True)
     ap.add_argument("-o", "--outdir", default="data/selfplay")
     ap.add_argument("-n", "--games", type=int, default=1)
@@ -53,7 +55,7 @@ def main():
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
-    cmd = [args.leelaz, "--gtp", "-q", "-w", args.weights, "-v", str(args.visits),
+    cmd = shlex.split(args.leelaz) + ["--gtp", "-q", "-w", args.weights, "-v", str(args.visits),
            "--noponder", "--randomcnt", str(args.randomcnt), "--noise",
            "--resignpct", "5"]
     if args.threads:
