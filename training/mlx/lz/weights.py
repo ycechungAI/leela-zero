@@ -10,7 +10,9 @@ SUPPORTED_READ = (1, 2)      # 2 = ELF: value head not from side to move
 
 def _open(path, mode):
     if str(path).endswith(".gz"):
-        return gzip.open(path, mode + "t")
+        # Level 1: about 15x faster than the default 9 for a few % more bytes;
+        # export runs on the training thread.
+        return gzip.open(path, mode + "t", compresslevel=1)
     return open(path, mode)
 
 
@@ -30,5 +32,6 @@ def write_weights(path, tensors):
     with _open(path, "w") as f:
         f.write("1\n")
         for t in tensors:
-            f.write(" ".join("%.9g" % x for x in np.asarray(t, np.float32).ravel()))
+            values = np.asarray(t, np.float32).ravel().tolist()
+            f.write(" ".join(map("{:.9g}".format, values)))
             f.write("\n")

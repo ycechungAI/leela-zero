@@ -64,9 +64,9 @@ def projected_peak_bytes(blocks, filters, batch, dtype):
     return int(6 * weights * 4 + activations + (300 << 20))
 
 
-def memory_guard(blocks, filters, batch, dtype, force):
-    info = mx.device_info()
-    total = int(info["memory_size"])
+def memory_guard(blocks, filters, batch, dtype, force, total=None):
+    if total is None:
+        total = int(mx.device_info()["memory_size"])
     budget = min(N5_BYTES, int(0.7 * total)) if total <= (16 << 30) else int(0.7 * total)
     projected = projected_peak_bytes(blocks, filters, batch, dtype)
     print("Projected peak memory %.1f GB (budget %.1f GB of %.0f GB)"
@@ -121,7 +121,6 @@ class Trainer:
         self._grad_step = grad_step
         self._apply = apply
         self._pending = None
-        self._count = 0
 
     def train_batch(self, planes, probs, winner):
         """One micro-batch; applies the update every `macrobatch` batches.
@@ -132,13 +131,14 @@ class Trainer:
             self._pending = grads
         else:
             self._pending = tree_map(lambda a, b: a + b, self._pending, grads)
-        self._count += 1
         self.step += 1
-        if self._count == self.macrobatch:
+        # Like tfprocess (steps % macrobatch): the update phase follows the
+        # step count, so it survives a checkpoint taken at an update boundary.
+        if self.step % self.macrobatch == 0:
             self.optimizer.learning_rate = mx.array(
                 lr_at(self.schedule, self.step - 1), dtype=mx.float32)
             self._apply(self._pending)
-            self._pending, self._count = None, 0
+            self._pending = None
         return aux
 
     def evaluate(self, planes, probs, winner):
@@ -162,7 +162,10 @@ class Trainer:
         self.model.update(tree_unflatten(
             [(k[6:], v) for k, v in arrays.items() if k.startswith("model/")]))
         opt = [(k[4:], v) for k, v in arrays.items() if k.startswith("opt/")]
-        self.optimizer.state = tree_unflatten(opt)
+        # Update the dict in place: the compiled step captured this object.
+        state = self.optimizer.state
+        state.clear()
+        state.update(tree_unflatten(opt))
         self.step = int(meta["step"])
         self.swa.load_state(arrays, meta)
         mx.eval(self.model.parameters(), self.optimizer.state)
@@ -238,10 +241,14 @@ def build_model(args):
     blocks = args.blocks or args.blockspref
     filters = args.filters or args.filterspref
     if args.import_weights:
-        _, tensors = read_weights(args.import_weights)
+        version, tensors = read_weights(args.import_weights)
+        if version != 1:
+            raise SystemExit("--import-weights: version %d (ELF) nets read the "
+                             "value head differently and cannot be trained "
+                             "here" % version)
         w_blocks, w_filters = shape_from_tensors(tensors)
-        if (blocks, filters) not in ((None, None), (w_blocks, w_filters)):
-            raise SystemExit("--import-weights is %dx%d, not %dx%d"
+        if (blocks or w_blocks, filters or w_filters) != (w_blocks, w_filters):
+            raise SystemExit("--import-weights is %dx%d, not %sx%s"
                              % (w_blocks, w_filters, blocks, filters))
         return tensors_to_model(tensors)
     if not blocks or not filters:
@@ -261,7 +268,12 @@ def main(argv=None):
         trainer.load_checkpoint(restore)
         print("Restored step", trainer.step)
 
-    training = get_chunks(train_prefix or "")
+    if not train_prefix:
+        raise SystemExit("Must supply --train (a training chunk prefix)")
+    if args.export_every % args.macrobatch:
+        raise SystemExit("--export-every must be a multiple of --macrobatch "
+                         "(checkpoints are taken between updates)")
+    training = get_chunks(train_prefix)
     if not training:
         raise SystemExit("No data to train on!")
     if args.test:
@@ -310,8 +322,6 @@ def main(argv=None):
                         step, m["policy"], 100 * m["accuracy"], m["mse"]),
                         flush=True)
                 if step % args.export_every == 0:
-                    trainer.save_checkpoint(os.path.join(
-                        args.checkpoint_dir, "step-%d.safetensors" % step))
                     trainer.export(os.path.join(
                         args.export_dir, "lz-%d.txt.gz" % step))
                     if not args.no_swa:
@@ -322,6 +332,15 @@ def main(argv=None):
                                     args.export_dir,
                                     "lz-swa-%d-%d.txt.gz" % (n, step)),
                                 args.swa_batches)
+                    # After the SWA update, so a resume continues the average.
+                    trainer.save_checkpoint(os.path.join(
+                        args.checkpoint_dir, "step-%d.safetensors" % step))
+            step = trainer.step
+            if step % args.export_every and step % args.macrobatch == 0:
+                # The run ended between exports: keep its last weights.
+                trainer.export(os.path.join(args.export_dir, "lz-%d.txt.gz" % step))
+                trainer.save_checkpoint(os.path.join(
+                    args.checkpoint_dir, "step-%d.safetensors" % step))
         finally:
             if test_data:
                 test_data.close()

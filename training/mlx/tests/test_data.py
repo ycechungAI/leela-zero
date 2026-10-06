@@ -110,3 +110,38 @@ def test_dead_feeder_raises_instead_of_hanging(tmp_path):
         for _ in range(10):          # slots already filled may still drain
             batches.next()
     batches.close()
+
+
+def test_feeder_exits_when_the_trainer_is_killed(tmp_path):
+    """No orphaned feeder or workers after the trainer dies (review 3.R)."""
+    import os
+    import signal
+    import subprocess
+    import sys
+    rng = np.random.default_rng(4)
+    chunks, _ = write_chunks(tmp_path, rng, files=2, per_file=32)
+    script = tmp_path / "trainer.py"
+    script.write_text(
+        "import sys, time\nfrom lz import data\n"
+        "if __name__ == '__main__':\n"
+        "    b = data.Batches(sys.argv[1:], 8, shuffle_bytes=8 * data.V2.itemsize, workers=1)\n"
+        "    b.next()\n"
+        "    print(b._proc.pid, flush=True)\n"
+        "    time.sleep(60)\n")
+    proc = subprocess.Popen([sys.executable, str(script)] + chunks,
+                            stdout=subprocess.PIPE, text=True)
+    line = proc.stdout.readline()
+    while not line.strip().isdigit():         # ChunkParser prints a banner
+        line = proc.stdout.readline()
+    feeder = int(line)
+    proc.send_signal(signal.SIGKILL)
+    proc.wait()
+    for _ in range(100):
+        try:
+            os.kill(feeder, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(feeder, signal.SIGKILL)
+        pytest.fail("feeder still running 10 s after the trainer died")

@@ -107,15 +107,23 @@ def _feeder(chunks, shm_name, batch, slots, shuffle_records, sample, workers,
         records = parser.v2_gen()
         record_size = V2.itemsize
         staging = bytearray(batch * record_size)
-        while not stop.is_set():
+        parent = mp.parent_process()
+
+        def running():
+            # Stop when asked, and when the trainer died without asking.
+            return not stop.is_set() and (parent is None or parent.is_alive())
+
+        while running():
             for i in range(batch):
+                if i % 64 == 0 and not running():
+                    return
                 staging[i * record_size:(i + 1) * record_size] = next(records)
             while True:
                 try:
                     slot = free.get(timeout=0.2)
                     break
                 except queue.Empty:
-                    if stop.is_set():
+                    if not running():
                         return
             decode_v2(staging, *slot_views(shm.buf, slot, batch))
             ready.put(slot)

@@ -123,10 +123,11 @@ def test_fp16_loss_scaling_leaves_gradients_unscaled():
 
 
 def test_memory_guard_refuses_big_configs_and_allows_the_target():
+    sixteen = 16 << 30              # judge as on a 16 GB Mac, whatever runs this
     with pytest.raises(SystemExit):
-        train.memory_guard(40, 256, 1024, "fp32", force=False)
-    train.memory_guard(20, 256, 256, "bf16", force=False)     # N5 target config
-    train.memory_guard(40, 256, 1024, "fp32", force=True)     # --force wins
+        train.memory_guard(40, 256, 1024, "fp32", force=False, total=sixteen)
+    train.memory_guard(20, 256, 256, "bf16", force=False, total=sixteen)  # N5 target
+    train.memory_guard(40, 256, 1024, "fp32", force=True, total=sixteen)
 
 
 def test_cli_trains_checkpoints_and_exports_a_net_leelaz_can_load(tmp_path, capsys):
@@ -155,6 +156,10 @@ def test_cli_trains_checkpoints_and_exports_a_net_leelaz_can_load(tmp_path, caps
     swa_net = out / "lz-swa-1-30.txt.gz"
     assert swa_net.exists()
     tensors_to_model(read_weights(swa_net)[1])         # loads, right shape
+    # The checkpoint is written after the SWA update (review 3.R).
+    ck = train.Trainer(LeelaZeroNet(1, 8), "fp32", train.parse_schedule("0:0.05"))
+    ck.load_checkpoint(str(ckpt))
+    assert ck.swa.n == 1
     version, tensors = read_weights(exported)
     assert version == 1
     model = tensors_to_model(tensors)
@@ -177,9 +182,67 @@ def test_cli_trains_checkpoints_and_exports_a_net_leelaz_can_load(tmp_path, caps
         "--import-weights", str(exported), "--restore", str(ckpt),
         "--export-dir", str(out), "--checkpoint-dir", str(tmp_path / "ck")])
     assert rc == 0 and "Restored step 30" in capsys.readouterr().out
+    # --steps 40 is not a multiple of --export-every: the end is still saved.
+    assert (out / "lz-40.txt.gz").exists()
+    assert (tmp_path / "ck" / "step-40.safetensors").exists()
 
 
 def test_memory_projection_matches_the_measured_peaks():
     gb = lambda *a: train.projected_peak_bytes(*a) / 2**30
     assert gb(20, 256, 64, "bf16") == pytest.approx(3.26, abs=0.3)
     assert gb(20, 256, 256, "bf16") == pytest.approx(10.55, abs=0.4)
+
+
+def test_resume_matches_an_uninterrupted_run_over_several_steps(tmp_path):
+    """The compiled step must use the restored optimizer state (review 3.R)."""
+    batches = [batch(20 + i) for i in range(8)]
+    t = make_trainer(schedule="0:0.02,5:0.01")
+    for b in batches[:3]:
+        t.train_batch(*b)
+    path = str(tmp_path / "ck.safetensors")
+    t.save_checkpoint(path)
+    r = make_trainer(schedule="0:0.02,5:0.01", seed=9)
+    r.load_checkpoint(path)
+    for b in batches[3:]:
+        t.train_batch(*b)
+        r.train_batch(*b)
+    mx.eval(t.model.parameters(), r.model.parameters())
+    for k, v in params_flat(t).items():
+        np.testing.assert_allclose(params_flat(r)[k], v, rtol=1e-5, atol=1e-6,
+                                   err_msg=k)
+
+
+def test_macrobatch_phase_follows_the_step_count():
+    t = make_trainer(macrobatch=3)
+    t.step = 7                       # e.g. resumed: next update at step 9
+    before = params_flat(t)
+    t.train_batch(*batch(1))         # step 8: no update
+    assert all(np.array_equal(before[k], v) for k, v in params_flat(t).items()
+               if "running" not in k)
+    t.train_batch(*batch(2))         # step 9: update
+    mx.eval(t.model.parameters())
+    assert any(not np.array_equal(before[k], v)
+               for k, v in params_flat(t).items() if "running" not in k)
+
+
+@pytest.mark.parametrize("argv,message", [
+    (["--blocks", "1", "--filters", "8"], "--train"),
+    (["--blocks", "1", "--filters", "8", "--train", "x", "--macrobatch", "3",
+      "--export-every", "100"], "multiple of --macrobatch"),
+])
+def test_bad_arguments_exit_cleanly(argv, message, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit, match=message):
+        train.main(argv)
+
+
+def test_import_shape_mismatch_and_v2_exit_cleanly(tmp_path):
+    from lz.weights import write_weights
+    from test_weights import random_tensors
+    net = tmp_path / "n.txt"
+    write_weights(net, random_tensors(1, 8, 0))
+    with pytest.raises(SystemExit, match="not 2xNone"):
+        train.main(["--import-weights", str(net), "--blocks", "2", "--train", "x"])
+    net.write_text(net.read_text().replace("1\n", "2\n", 1))
+    with pytest.raises(SystemExit, match="ELF"):
+        train.main(["--import-weights", str(net), "--train", "x"])
