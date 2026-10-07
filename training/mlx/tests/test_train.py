@@ -265,3 +265,26 @@ def test_value_weight_scales_only_the_value_loss():
     decayed = before - 0.05 * 1.9 * 1e-4 * before
     np.testing.assert_allclose(np.asarray(t.model.value_fc2.weight), decayed,
                                rtol=1e-4, atol=1e-8)
+
+
+def test_frozen_batchnorm_keeps_statistics_and_still_trains():
+    from test_model import randomize_bn
+    m = LeelaZeroNet(1, 8)
+    randomize_bn(m, np.random.default_rng(0))
+    m.freeze_batchnorm_statistics()
+    stats = {k: np.asarray(v).copy() for k, v in tree_flatten(m.parameters())
+             if "running" in k}
+    t = train.Trainer(m, "fp32", train.parse_schedule("0:0.05"))
+    b = batch(3)
+    for _ in range(3):
+        t.train_batch(*b)
+    mx.eval(t.model.parameters())
+    after = dict(tree_flatten(t.model.parameters()))
+    assert all(np.array_equal(np.asarray(after[k]), v) for k, v in stats.items())
+    # Training mode now matches evaluation mode exactly.
+    t.model.train()
+    train_logits, _ = t.model(b[0])
+    t.model.eval()
+    eval_logits, _ = t.model(b[0])
+    np.testing.assert_allclose(np.asarray(train_logits), np.asarray(eval_logits),
+                               rtol=1e-6, atol=1e-6)

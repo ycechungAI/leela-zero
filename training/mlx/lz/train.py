@@ -232,6 +232,8 @@ def parse_args(argv):
     p.add_argument("--swa-max-n", type=int, default=16)
     p.add_argument("--swa-batches", type=int, default=200,
                    help="batches used to refine batch norm in an SWA net")
+    p.add_argument("--freeze-bn", action="store_true",
+                   help="keep the batch norm statistics fixed (fine-tuning)")
     p.add_argument("--value-weight", type=float, default=1.0,
                    help="value loss weight (lower it for small datasets)")
     p.add_argument("--force", action="store_true",
@@ -263,6 +265,8 @@ def main(argv=None):
     train_prefix = args.train or args.trainpref
     restore = args.restore or args.restorepref
     model = build_model(args)
+    if args.freeze_bn:
+        model.freeze_batchnorm_statistics()
     memory_guard(model.blocks, model.filters, args.batch, args.dtype, args.force)
     trainer = Trainer(model, args.dtype, parse_schedule(args.lr_schedule),
                       args.macrobatch, args.swa_c, args.swa_max_n,

@@ -65,9 +65,12 @@ class BatchNorm(nn.Module):
         self.running_mean = mx.zeros((channels,))
         self.running_var = mx.ones((channels,))
         self.freeze(keys=["running_mean", "running_var"], recurse=False)
+        # Fine-tuning on little data: normalise with the stored statistics and
+        # leave them alone, even in training mode.
+        self.use_running_stats = False
 
     def __call__(self, x):
-        if self.training:
+        if self.training and not self.use_running_stats:
             y, mean, unbiased = _bn_train(x, self.beta)
             self.running_mean = ((1 - BN_MOMENTUM) * self.running_mean
                                  + BN_MOMENTUM * mean)
@@ -166,6 +169,13 @@ class LeelaZeroNet(nn.Module):
         for block in self.tower:
             blocks += [block.conv1, block.conv2]
         return blocks + [self.policy_conv, self.value_conv]
+
+    def freeze_batchnorm_statistics(self, frozen=True):
+        """Train with the stored batch norm statistics (they are not updated):
+        the usual way to fine-tune a strong net on a small dataset, whose
+        statistics are not representative (plan 13, T6)."""
+        for block in self.conv_blocks():
+            block.bn.use_running_stats = frozen
 
     def regularized_weights(self):
         """The tensors tfprocess puts in tf.GraphKeys.WEIGHTS."""
