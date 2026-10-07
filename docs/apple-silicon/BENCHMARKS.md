@@ -431,6 +431,24 @@ value by 0.12 on average: the 257 games are not representative of the data
 the public net was trained on. tfprocess notes that small datasets need a
 smaller value-loss weight.
 
+### T6 second and third attempts (2026-10-06)
+
+| fine-tune (500 steps, lr 0.0005, bf16) | value drift vs original | policy KL | match vs original |
+| --- | ---: | ---: | --- |
+| first attempt (value weight 1, 1000 steps) | 0.70 | 0.55 | 7–35 (17%), stopped at 42 |
+| `--value-weight 0.1` | 0.19 | 0.42 | **41–66 (38%)**, stopped at 107 (95% CI ~29–48%) |
+| `--value-weight 0.1 --freeze-bn` | 0.30 | 0.46 | not played |
+| batch norm statistics recomputed only (no weight update) | 0.14 | 0.04 | — |
+
+Even a gentle fine-tune moves the policy a long way (KL 0.42–0.46 in 500
+steps) because the targets are weaker than the net: 200-visit self-play with
+Dirichlet root noise gives visit distributions noisier than the net's own
+prior (Leela Zero trained on 1600-visit games), so fitting them costs
+strength. This is a property of the data, not of the trainer, whose
+equivalence with tfprocess is carried by T1–T3. A meaningful T6 needs
+self-play at Leela Zero's 1600 visits (roughly 8× the 200-visit generation
+time) or the public training data.
+
 ## Step 3.5: MLX training step, speed and memory (2026-10-06)
 
 `lz.train.Trainer` (compiled grad step, bf16 compute, fp32 master weights),
