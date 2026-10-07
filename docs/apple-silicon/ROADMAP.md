@@ -86,18 +86,24 @@ Tag `as.2`.
 
 This phase can start in parallel with Phase 2 after Phase 0.
 
-1. Scaffold `training/mlx` (uv, Python 3.12, pytest).
-2. `model.py` with TF parity, plus T1.
-3. `import_weights.py` / `export.py`, plus T2 and T3 (uses the Phase 0 eval hook).
-4. Shared-memory data pipeline reusing `chunkparser.py`.
-5. `train.py`: compiled step, bf16, macrobatch, LR schedule, checkpoints,
-   memory guard.
-6. SWA with BN recalc.
-7. T4 (learning sanity) and T5 (performance and memory).
-8. T6 strength match (400 games). It may finish after the tag and be reported
-   in `as.4`.
+Plan: [13-plan-phase3-mlx.md](13-plan-phase3-mlx.md); decisions ADR-012, ADR-013.
 
-**Exit:** T1–T5 pass. Tag `as.3`.
+1. ✅ Scaffold `training/mlx` (uv, Python 3.12, pytest, CI job).
+2. ✅ `model.py` with TF parity, plus T1 (loss = NumPy reference ≤ 1e-5).
+3. ✅ `weights.py` / `convert.py`, plus T2 (3.5e-6, tol 1e-5) and T3 (2.2e-6)
+   on a real 15b×192 net.
+4. ✅ Shared-memory data pipeline reusing `chunkparser.py` (146k positions/s).
+5. ✅ `train.py`: compiled step, bf16, macrobatch, LR schedule, checkpoints,
+   memory guard, `--value-weight`, `--freeze-bn`.
+6. ✅ SWA with BN recalc.
+7. ✅ T4 (6b×64: test accuracy 42.2%) and T5 (100% GPU, 0.1% input stall,
+   9.15 GiB at 20b×256 batch 256).
+8. 🟡 T6 strength match: three fine-tunes on 200-visit self-play lost to the
+   original net (best 38%); the targets are weaker than the net. Needs
+   1600-visit self-play or public training data; reported in `as.4`.
+R. ✅ Phase review: 10 findings fixed.
+
+**Exit:** T1–T5 pass (✅). Tag `as.3`.
 
 ## Phase 4 — `v0.18.0-as.4` "Polish & Distribution" (spec 08, ADR-004)
 
