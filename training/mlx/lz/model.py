@@ -174,10 +174,13 @@ class LeelaZeroNet(nn.Module):
                    self.value_fc2.weight])
 
 
-def loss_fn(model, planes, probs, winner):
+def loss_fn(model, planes, probs, winner, value_weight=1.0):
     """tfprocess.tower_loss. Returns (total, (policy, mse, reg, accuracy)).
 
     `mse` is the raw mean squared error; tfprocess reports mse / 4.
+    `value_weight` scales the value loss in the total; tfprocess advises
+    lowering it when training on a small dataset (the value head memorises
+    game results).
     """
     logits, value = model(planes)
     policy = mx.mean(-mx.sum(probs * nn.log_softmax(logits, axis=-1), axis=-1))
@@ -186,4 +189,4 @@ def loss_fn(model, planes, probs, winner):
                          for w in model.regularized_weights())
     accuracy = mx.mean((mx.argmax(logits, axis=-1)
                         == mx.argmax(probs, axis=-1)).astype(mx.float32))
-    return policy + mse + reg, (policy, mse, reg, accuracy)
+    return policy + value_weight * mse + reg, (policy, mse, reg, accuracy)

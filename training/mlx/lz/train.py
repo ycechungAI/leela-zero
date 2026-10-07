@@ -86,7 +86,7 @@ def memory_guard(blocks, filters, batch, dtype, force, total=None):
 
 class Trainer:
     def __init__(self, model, dtype, schedule, macrobatch=1, swa_c=1,
-                 swa_max_n=16):
+                 swa_max_n=16, value_weight=1.0):
         self.model = model
         self.dtype = dtype
         self.macrobatch = macrobatch
@@ -101,7 +101,7 @@ class Trainer:
         scale = self.loss_scale
 
         def scaled(model, planes, probs, winner):
-            total, aux = loss_fn(model, planes, probs, winner)
+            total, aux = loss_fn(model, planes, probs, winner, value_weight)
             return total * scale, aux
 
         value_and_grad = nn.value_and_grad(model, scaled)
@@ -232,6 +232,8 @@ def parse_args(argv):
     p.add_argument("--swa-max-n", type=int, default=16)
     p.add_argument("--swa-batches", type=int, default=200,
                    help="batches used to refine batch norm in an SWA net")
+    p.add_argument("--value-weight", type=float, default=1.0,
+                   help="value loss weight (lower it for small datasets)")
     p.add_argument("--force", action="store_true",
                    help="ignore the memory guard")
     return p.parse_args(argv)
@@ -263,7 +265,8 @@ def main(argv=None):
     model = build_model(args)
     memory_guard(model.blocks, model.filters, args.batch, args.dtype, args.force)
     trainer = Trainer(model, args.dtype, parse_schedule(args.lr_schedule),
-                      args.macrobatch, args.swa_c, args.swa_max_n)
+                      args.macrobatch, args.swa_c, args.swa_max_n,
+                      args.value_weight)
     if restore:
         trainer.load_checkpoint(restore)
         print("Restored step", trainer.step)

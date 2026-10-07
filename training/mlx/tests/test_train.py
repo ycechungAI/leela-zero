@@ -246,3 +246,22 @@ def test_import_shape_mismatch_and_v2_exit_cleanly(tmp_path):
     net.write_text(net.read_text().replace("1\n", "2\n", 1))
     with pytest.raises(SystemExit, match="ELF"):
         train.main(["--import-weights", str(net), "--train", "x"])
+
+
+def test_value_weight_scales_only_the_value_loss():
+    from lz.model import loss_fn
+    m = LeelaZeroNet(1, 8)
+    b = batch(5)
+    full, (p, mse, reg, _) = loss_fn(m, *b)
+    tenth, _ = loss_fn(m, *b, value_weight=0.1)
+    assert float(full) == pytest.approx(float(p + mse + reg), rel=1e-6)
+    assert float(tenth) == pytest.approx(float(p + 0.1 * mse + reg), rel=1e-6)
+    t = train.Trainer(LeelaZeroNet(1, 8), "fp32", train.parse_schedule("0:0.05"),
+                      value_weight=0.0)
+    before = np.asarray(t.model.value_fc2.weight).copy()
+    t.train_batch(*b)
+    mx.eval(t.model.parameters())
+    # With no value loss only L2 decay moves the value head's last layer.
+    decayed = before - 0.05 * 1.9 * 1e-4 * before
+    np.testing.assert_allclose(np.asarray(t.model.value_fc2.weight), decayed,
+                               rtol=1e-4, atol=1e-8)
